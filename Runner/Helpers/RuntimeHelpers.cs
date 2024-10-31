@@ -40,7 +40,7 @@ internal static class RuntimeHelpers
 
                 git switch {{{job.BaseBranch}}}
 
-                eng/install-native-dependencies.sh linux
+                eng/common/native/install-dependencies.sh linux
                 """);
 
             await job.LogAsync($"Using runtime setup script:\n{script}");
