@@ -80,11 +80,24 @@ internal sealed class JitDiffJob : JobBase
     {
         string arch = IsArm ? "arm64" : "x64";
 
-        await job.RunProcessAsync("bash", $"build.sh clr+libs -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
+        (bool rebuildClr, bool rebuildLibs) = await ShouldRebuildAsync();
+
+        string targets = (rebuildClr, rebuildLibs) switch
+        {
+            (true, true) => "clr+libs",
+            (true, false) => "clr",
+            _ => "libs"
+        };
+
+        await job.RunProcessAsync("bash", $"build.sh {targets} -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
 
         Task copyReleaseBitsTask = RuntimeHelpers.CopyReleaseArtifactsAsync(job, branch, $"artifacts-{branch}");
 
-        await job.RunProcessAsync("bash", "build.sh clr.jit -c Checked", logPrefix: $"{branch} checked", workDir: "runtime");
+        if (rebuildClr)
+        {
+            await job.RunProcessAsync("bash", "build.sh clr.jit -c Checked", logPrefix: $"{branch} checked", workDir: "runtime");
+        }
+
         await job.RunProcessAsync("cp", $"-r runtime/artifacts/bin/coreclr/linux.{arch}.Checked/. clr-checked-{branch}", logPrefix: $"{branch} checked");
 
         if (uploadArtifacts)
@@ -94,6 +107,46 @@ internal sealed class JitDiffJob : JobBase
         }
 
         await copyReleaseBitsTask;
+
+        async Task<(bool Clr, bool Libs)> ShouldRebuildAsync()
+        {
+            if (branch == "pr" && !job.TryGetFlag("forceRebuildAll"))
+            {
+                bool clr = false;
+                bool libs = false;
+
+                foreach (string file in await GitHelper.GetChangedFilesAsync(job, "main", "runtime"))
+                {
+                    if (file.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        clr = true;
+
+                        if (file.Contains("/System.Private.CoreLib/", StringComparison.OrdinalIgnoreCase))
+                        {
+                            libs = true;
+                        }
+                    }
+                    else if (file.StartsWith("src/libraries/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        libs = true;
+                    }
+                    else if (!file.StartsWith("src/tests/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        clr = true;
+                        libs = true;
+                    }
+                }
+
+                if (!clr && !libs)
+                {
+                    await job.LogAsync($"WARNING: Don't need to rebuild anything? What is this PR?");
+                }
+
+                return (clr, libs);
+            }
+
+            return (true, true);
+        }
     }
 
     private async Task<string> CollectFrameworksDiffsAsync()

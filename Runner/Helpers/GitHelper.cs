@@ -30,4 +30,19 @@ internal static class GitHelper
             span.StartsWith("@@", StringComparison.Ordinal) ||
             span.StartsWith("\\ No newline at end of file", StringComparison.Ordinal);
     }
+
+    public static async Task<List<string>> GetChangedFilesAsync(JobBase job, string baselineRef, string workDir)
+    {
+        List<string> lines = [];
+
+        await job.RunProcessAsync("git",
+            $"diff --name-only {baselineRef}",
+            lines,
+            workDir: workDir,
+            checkExitCode: false,
+            suppressOutputLogs: true,
+            suppressStartingLog: true);
+
+        return lines;
+    }
 }
