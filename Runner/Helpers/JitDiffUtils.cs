@@ -24,6 +24,13 @@ internal static partial class JitDiffUtils
         bool debugInfo = job.TryGetFlag("debuginfo");
         bool gcInfo = job.TryGetFlag("gcinfo");
 
+        List<(string, string)> envVars = [];
+
+        if (job.TryGetFlag("JitDisasmWithGC"))
+        {
+            envVars.Add(("DOTNET_JitDisasmWithGC", "1"));
+        }
+
         await job.RunProcessAsync("jitutils/bin/jit-diff",
             $"diff " +
             (debugInfo ? "--debuginfo " : "") +
@@ -35,7 +42,8 @@ internal static partial class JitDiffUtils
             $"{frameworksOrAssembly} --pmi " +
             $"--core_root {coreRootFolder} " +
             $"--base {checkedClrFolder}",
-            logPrefix: $"jit-diff {coreRootFolder}");
+            logPrefix: $"jit-diff {coreRootFolder}",
+            envVars: envVars);
     }
 
     public static async Task<string> RunJitAnalyzeAsync(JobBase job, string mainDirectory, string prDirectory, int count = 100)

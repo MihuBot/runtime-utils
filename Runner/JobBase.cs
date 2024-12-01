@@ -315,6 +315,7 @@ public abstract class JobBase
         bool suppressOutputLogs = false,
         bool suppressStartingLog = false,
         ProcessPriorityClass priority = ProcessPriorityClass.Normal,
+        List<(string, string)>? envVars = null,
         CancellationToken cancellationToken = default)
     {
         processLogs ??= i => i;
@@ -334,14 +335,24 @@ public abstract class JobBase
             await LogAsync($"{logPrefix}{processLogs($"Running '{fileName} {arguments}'{(workDir is null ? null : $" from '{workDir}'")}")}");
         }
 
+        var startInfo = new ProcessStartInfo(fileName, arguments)
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            WorkingDirectory = workDir ?? string.Empty,
+        };
+
+        if (envVars is not null)
+        {
+            foreach ((string key, string value) in envVars)
+            {
+                startInfo.EnvironmentVariables.Add(key, value);
+            }
+        }
+
         using var process = new Process
         {
-            StartInfo = new ProcessStartInfo(fileName, arguments)
-            {
-                RedirectStandardError = true,
-                RedirectStandardOutput = true,
-                WorkingDirectory = workDir ?? string.Empty,
-            }
+            StartInfo = startInfo
         };
 
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(JobTimeout, cancellationToken);
