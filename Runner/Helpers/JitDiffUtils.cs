@@ -22,6 +22,7 @@ internal static partial class JitDiffUtils
         bool useTier0 = job.TryGetFlag("tier0");
         bool verbose = job.TryGetFlag("verbose");
         bool debugInfo = job.TryGetFlag("debuginfo");
+        bool gcInfo = job.TryGetFlag("gcinfo");
 
         await job.RunProcessAsync("jitutils/bin/jit-diff",
             $"diff " +
@@ -29,6 +30,7 @@ internal static partial class JitDiffUtils
             (verbose ? "--verbose " : "") +
             (useCctors ? "--cctors " : "") +
             (useTier0 ? "--tier0 " : "") +
+            (gcInfo ? "--gcinfo " : "") +
             $"--output {outputFolder} " +
             $"{frameworksOrAssembly} --pmi " +
             $"--core_root {coreRootFolder} " +
