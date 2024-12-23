@@ -126,6 +126,11 @@ internal sealed class JitDiffJob : JobBase
                             libs = true;
                         }
                     }
+                    else if (file.Contains("Common", StringComparison.OrdinalIgnoreCase))
+                    {
+                        clr = true;
+                        libs = true;
+                    }
                     else if (file.StartsWith("src/libraries/", StringComparison.OrdinalIgnoreCase))
                     {
                         libs = true;
