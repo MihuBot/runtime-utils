@@ -117,14 +117,14 @@ internal sealed class JitDiffJob : JobBase
 
                 foreach (string file in await GitHelper.GetChangedFilesAsync(job, "main", "runtime"))
                 {
-                    if (file.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase))
+                    if (file.Contains("/System.Private.CoreLib/", StringComparison.OrdinalIgnoreCase))
                     {
                         clr = true;
-
-                        if (file.Contains("/System.Private.CoreLib/", StringComparison.OrdinalIgnoreCase))
-                        {
-                            libs = true;
-                        }
+                        libs = true;
+                    }
+                    else if (file.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        clr = true;
                     }
                     else if (file.Contains("Common", StringComparison.OrdinalIgnoreCase))
                     {
