@@ -20,6 +20,7 @@ public abstract class JobBase
     private readonly Stopwatch _lastLogEntry = new();
     private HardwareInfo? _hardwareInfo;
     private volatile bool _completed;
+    private readonly List<(string, string)> _sharedEnvVars = [];
 
     protected readonly HttpClient HttpClient;
     protected readonly DateTime StartTime;
@@ -342,12 +343,11 @@ public abstract class JobBase
             WorkingDirectory = workDir ?? string.Empty,
         };
 
-        if (envVars is not null)
+        envVars = [.. _sharedEnvVars, .. envVars ?? []];
+
+        foreach ((string key, string value) in envVars)
         {
-            foreach ((string key, string value) in envVars)
-            {
-                startInfo.EnvironmentVariables.Add(key, value);
-            }
+            startInfo.EnvironmentVariables.Add(key, value);
         }
 
         using var process = new Process
@@ -499,6 +499,17 @@ public abstract class JobBase
 
     protected async Task ChangeWorkingDirectoryToRamOrFastestDiskAsync()
     {
+        string? newLocation = await ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore();
+        if (newLocation is not null)
+        {
+            string cachePath = Path.Combine(newLocation, "NuGetPackagesCache");
+            Directory.CreateDirectory(cachePath);
+            _sharedEnvVars.Add(("NUGET_PACKAGES", cachePath));
+        }
+    }
+
+    private async Task<string?> ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore()
+    {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             try
@@ -508,7 +519,7 @@ public abstract class JobBase
                     .ToArray();
 
                 await LogAsync($"Drives available: {string.Join(", ", drives.Select(
-                    d => $"Ready={d.IsReady} AvailableGB={d.AvailableFreeSpace >> 30} Path={d.RootDirectory.FullName}"))}");
+                    d => $"AvailableGB={d.AvailableFreeSpace >> 30} Path={d.RootDirectory.FullName}"))}");
 
                 if (drives.Length > 1)
                 {
@@ -520,13 +531,16 @@ public abstract class JobBase
                     Environment.CurrentDirectory = newWorkDir;
 
                     await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {newWorkDir}");
+
+                    return newWorkDir;
                 }
             }
             catch (Exception ex)
             {
                 await LogAsync($"Failed to apply new working directory: {ex}");
             }
-            return;
+
+            return null;
         }
 
         Stopwatch s = Stopwatch.StartNew();
@@ -558,12 +572,16 @@ public abstract class JobBase
                 Environment.CurrentDirectory = NewWorkDir;
 
                 await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {NewWorkDir}");
+
+                return NewWorkDir;
             }
             catch (Exception ex)
             {
                 await LogAsync($"Failed to apply new working directory: {ex}");
             }
         }
+
+        return null;
     }
 
     private async Task StreamSystemHardwareInfoAsync()
