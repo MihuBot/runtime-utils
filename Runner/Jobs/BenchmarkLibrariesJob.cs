@@ -13,6 +13,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         await BuildRuntimeAsync();
 
         await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+        await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
 
         await WaitForPendingTasksAsync();
 

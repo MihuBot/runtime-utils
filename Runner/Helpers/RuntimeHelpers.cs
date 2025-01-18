@@ -123,10 +123,15 @@ internal static class RuntimeHelpers
 
     public static async Task InstallRuntimeDotnetSdkAsync(JobBase job)
     {
+        await InstallDotnetSdkAsync(job, "runtime/global.json");
+    }
+
+    public static async Task InstallDotnetSdkAsync(JobBase job, string globalJsonPath)
+    {
         AssertIsLinux();
 
         await job.RunProcessAsync("wget", "https://dot.net/v1/dotnet-install.sh");
-        await job.RunProcessAsync("bash", "dotnet-install.sh --jsonfile runtime/global.json --install-dir /usr/lib/dotnet");
+        await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir /usr/lib/dotnet");
     }
 
     public static async Task CopyReleaseArtifactsAsync(JobBase job, string branch, string destination)
