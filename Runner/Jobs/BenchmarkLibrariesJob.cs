@@ -10,7 +10,11 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         await CloneRuntimeAndPerformanceAndSetupToolsAsync();
 
-        await BuildRuntimeAsync();
+        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: false);
+
+        await RunProcessAsync("git", "switch pr", workDir: "runtime");
+
+        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false);
 
         await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
         await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
@@ -84,36 +88,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             }
 
             return ("dotnet/performance", "main");
-        }
-    }
-
-    private async Task BuildRuntimeAsync()
-    {
-        bool uploadCoreruns = TryGetFlag("UploadCoreruns");
-
-        await BuildAndCopyRuntimeBranchBitsAsync("main");
-
-        if (uploadCoreruns)
-        {
-            PendingTasks.Enqueue(ZipAndUploadArtifactAsync("build-artifacts-main", "artifacts-main"));
-        }
-
-        await RunProcessAsync("git", "switch pr", workDir: "runtime");
-
-        await BuildAndCopyRuntimeBranchBitsAsync("pr");
-
-        if (uploadCoreruns)
-        {
-            PendingTasks.Enqueue(ZipAndUploadArtifactAsync("build-artifacts-pr", "artifacts-pr"));
-        }
-
-        async Task BuildAndCopyRuntimeBranchBitsAsync(string branch)
-        {
-            string arch = IsArm ? "arm64" : "x64";
-
-            await RunProcessAsync("bash", $"build.sh clr+libs -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
-
-            await RuntimeHelpers.CopyReleaseArtifactsAsync(this, branch, $"artifacts-{branch}");
         }
     }
 
