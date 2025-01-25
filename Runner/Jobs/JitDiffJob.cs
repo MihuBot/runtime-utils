@@ -181,6 +181,11 @@ internal sealed class JitDiffJob : JobBase
 
             await foreach (BlobItem blob in container.GetBlobsAsync(cancellationToken: JobTimeout))
             {
+                if (!blob.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var blobClient = container.GetBlobClient(blob.Name);
 
                 string name = Path.GetFileName(blob.Name);
