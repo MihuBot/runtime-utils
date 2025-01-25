@@ -13,7 +13,7 @@ internal static partial class JitDiffUtils
     {
         ArgumentOutOfRangeException.ThrowIfZero(assemblyPaths.Length);
 
-        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly {path}")));
+        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")));
     }
 
     private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly)

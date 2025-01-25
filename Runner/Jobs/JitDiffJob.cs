@@ -227,7 +227,9 @@ internal sealed class JitDiffJob : JobBase
         {
             await Task.WhenAll(
                 JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory),
-                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory),
+                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
+
+            await Task.WhenAll(
                 DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory),
                 DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
         }
@@ -245,8 +247,33 @@ internal sealed class JitDiffJob : JobBase
 
         async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder)
         {
-            await Task.WhenAll(Directory.GetDirectories(ExtraProjectsDirectory).Select(projectDir =>
-                JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, [$"{Path.GetFileNameWithoutExtension(projectDir)}.dll"])));
+            foreach (string projectDir in Directory.GetDirectories(ExtraProjectsDirectory))
+            {
+                List<string> testedAssemblies = new();
+
+                string diffAssembliesListPath = Path.Combine(projectDir, "DiffAssemblies.txt");
+
+                if (File.Exists(diffAssembliesListPath))
+                {
+                    foreach (string line in File.ReadAllLines(diffAssembliesListPath))
+                    {
+                        if (line.StartsWith('#') || string.IsNullOrWhiteSpace(line) || !line.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        testedAssemblies.Add(line);
+                    }
+                }
+                else
+                {
+                    testedAssemblies.Add($"{Path.GetFileNameWithoutExtension(projectDir)}.dll");
+                }
+
+                string[] assemblyPaths = testedAssemblies.Select(a => Path.GetFullPath(Path.Combine(projectDir, a))).ToArray();
+
+                await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, assemblyPaths);
+            }
         }
     }
 
