@@ -239,7 +239,10 @@ internal sealed class JitDiffJob : JobBase
             PendingTasks.Enqueue(ZipAndUploadArtifactAsync("jit-diffs-pr", DiffsPrDirectory));
         }
 
-        string diffAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this, $"{DiffsMainDirectory}/{DasmSubdirectory}", $"{DiffsPrDirectory}/{DasmSubdirectory}");
+        CombineAllDiffs(DiffsMainDirectory, "diffs-main-combined");
+        CombineAllDiffs(DiffsPrDirectory, "diffs-pr-combined");
+
+        string diffAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this, "diffs-main-combined", "diffs-pr-combined");
 
         PendingTasks.Enqueue(UploadTextArtifactAsync("diff-frameworks.txt", diffAnalyzeSummary));
 
@@ -274,6 +277,16 @@ internal sealed class JitDiffJob : JobBase
 
                 await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, assemblyPaths);
             }
+        }
+
+        void CombineAllDiffs(string directory, string destination)
+        {
+            Directory.CreateDirectory(destination);
+
+            Parallel.ForEach(Directory.EnumerateFiles(directory, "*.dasm", SearchOption.AllDirectories).ToArray(), file =>
+            {
+                File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
+            });
         }
     }
 
