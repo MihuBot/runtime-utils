@@ -1,4 +1,7 @@
-﻿namespace Runner.Jobs;
+﻿using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
+
+namespace Runner.Jobs;
 
 internal sealed class JitDiffJob : JobBase
 {
@@ -21,7 +24,11 @@ internal sealed class JitDiffJob : JobBase
 
         await BuildAndCopyRuntimeBranchBitsAsync(this, "pr");
 
+        Task downloadExtraAssemblies = DownloadExtraTestAssembliesAsync();
+
         await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+
+        await downloadExtraAssemblies;
 
         string diffAnalyzeSummary = await CollectFrameworksDiffsAsync();
 
@@ -158,6 +165,37 @@ internal sealed class JitDiffJob : JobBase
             }
 
             return (true, true);
+        }
+    }
+
+    private async Task DownloadExtraTestAssembliesAsync()
+    {
+        try
+        {
+            if (!Metadata.TryGetValue("JitDiffExtraAssembliesSasUri", out string? uri))
+            {
+                return;
+            }
+
+            var container = new BlobContainerClient(new Uri(uri));
+
+            await foreach (BlobItem blob in container.GetBlobsAsync(cancellationToken: JobTimeout))
+            {
+                var blobClient = container.GetBlobClient(blob.Name);
+
+                string name = Path.GetFileName(blob.Name);
+                string mainPath = Path.Combine("artifacts-main", name);
+                string prPath = Path.Combine("artifacts-pr", name);
+
+                await blobClient.DownloadToAsync(mainPath, JobTimeout);
+                File.Copy(mainPath, prPath);
+
+                await LogAsync($"[Extra assemblies] Downloaded {name}");
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogAsync($"Failed to download extra test assemblies: {ex}");
         }
     }
 
