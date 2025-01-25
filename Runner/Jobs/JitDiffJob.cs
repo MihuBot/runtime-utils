@@ -1,5 +1,6 @@
 ﻿using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using System.IO.Compression;
 
 namespace Runner.Jobs;
 
@@ -9,6 +10,7 @@ internal sealed class JitDiffJob : JobBase
     public const string DiffsMainDirectory = $"{DiffsDirectory}/main";
     public const string DiffsPrDirectory = $"{DiffsDirectory}/pr";
     public const string DasmSubdirectory = "dasmset_1/base";
+    public const string ExtraProjectsDirectory = "extra-projects";
 
     public JitDiffJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
@@ -75,6 +77,7 @@ internal sealed class JitDiffJob : JobBase
             Directory.CreateDirectory(DiffsDirectory);
             Directory.CreateDirectory(DiffsMainDirectory);
             Directory.CreateDirectory(DiffsPrDirectory);
+            Directory.CreateDirectory(ExtraProjectsDirectory);
         });
 
         await createDirectoriesTask;
@@ -181,21 +184,35 @@ internal sealed class JitDiffJob : JobBase
 
             await foreach (BlobItem blob in container.GetBlobsAsync(cancellationToken: JobTimeout))
             {
-                if (!blob.Name.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                string fileName = Path.GetFileName(blob.Name);
+                string projectName = Path.GetFileNameWithoutExtension(fileName);
+
+                if (!fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
+                    !fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 {
+                    await LogAsync($"[Extra assemblies] Skipping {fileName}");
                     continue;
                 }
 
+                string projectDirectory = Path.Combine(ExtraProjectsDirectory, projectName);
+                Directory.CreateDirectory(projectDirectory);
+
                 var blobClient = container.GetBlobClient(blob.Name);
 
-                string name = Path.GetFileName(blob.Name);
-                string mainPath = Path.Combine("artifacts-main", name);
-                string prPath = Path.Combine("artifacts-pr", name);
+                if (fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                {
+                    await blobClient.DownloadToAsync(Path.Combine(projectDirectory, fileName), JobTimeout);
+                }
+                else
+                {
+                    using var zipFile = new TempFile("zip");
+                    await blobClient.DownloadToAsync(zipFile.Path, JobTimeout);
 
-                await blobClient.DownloadToAsync(mainPath, JobTimeout);
-                File.Copy(mainPath, prPath);
+                    using var archive = ZipFile.OpenRead(zipFile.Path);
+                    archive.ExtractToDirectory(projectDirectory);
+                }
 
-                await LogAsync($"[Extra assemblies] Downloaded {name}");
+                await LogAsync($"[Extra assemblies] Downloaded {fileName}");
             }
         }
         catch (Exception ex)
@@ -210,7 +227,9 @@ internal sealed class JitDiffJob : JobBase
         {
             await Task.WhenAll(
                 JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory),
-                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
+                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory),
+                DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory),
+                DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
         }
         finally
         {
@@ -223,6 +242,12 @@ internal sealed class JitDiffJob : JobBase
         PendingTasks.Enqueue(UploadTextArtifactAsync("diff-frameworks.txt", diffAnalyzeSummary));
 
         return diffAnalyzeSummary;
+
+        async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder)
+        {
+            await Task.WhenAll(Directory.GetDirectories(ExtraProjectsDirectory).Select(projectDir =>
+                JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, [$"{Path.GetFileNameWithoutExtension(projectDir)}.dll"])));
+        }
     }
 
     private async Task UploadJitDiffExamplesAsync(string diffAnalyzeSummary, bool regressions)
