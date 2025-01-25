@@ -190,8 +190,7 @@ internal sealed class JitDiffJob : JobBase
                 string fileName = Path.GetFileName(blob.Name);
                 string projectName = Path.GetFileNameWithoutExtension(fileName);
 
-                if (!fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
-                    !fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                if (ShouldSkip(fileName))
                 {
                     await LogAsync($"[Extra assemblies] Skipping {fileName}");
                     continue;
@@ -221,6 +220,16 @@ internal sealed class JitDiffJob : JobBase
         catch (Exception ex)
         {
             await LogAsync($"Failed to download extra test assemblies: {ex}");
+        }
+
+        static bool ShouldSkip(string fileName)
+        {
+            if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            {
+                return IsArm;
+            }
+
+            return !fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
         }
     }
 
