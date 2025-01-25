@@ -156,6 +156,8 @@ internal static partial class JitDiffUtils
     public static async Task<(string[] Diffs, bool NoisyDiffsRemoved)> GetDiffMarkdownAsync(
         JobBase job,
         (string Description, string DasmFile, string Name)[] diffs,
+        string mainDasmDirectory,
+        string prDasmDirectory,
         Func<string, string?>? tryGetExtraInfo,
         Func<string, string> replaceMethodName,
         int maxCount)
@@ -164,9 +166,6 @@ internal static partial class JitDiffUtils
         {
             return (Array.Empty<string>(), false);
         }
-
-        const string MainDasmDirectory = $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}";
-        const string PrDasmDirectory = $"{JitDiffJob.DiffsPrDirectory}/{JitDiffJob.DasmSubdirectory}";
 
         bool includeKnownNoise = job.TryGetFlag("includeKnownNoise");
         bool includeRemovedMethod = job.TryGetFlag("includeRemovedMethodImprovements");
@@ -189,8 +188,8 @@ internal static partial class JitDiffUtils
                 return;
             }
 
-            string mainDiffsFile = $"{MainDasmDirectory}/{diff.DasmFile}";
-            string prDiffsFile = $"{PrDasmDirectory}/{diff.DasmFile}";
+            string mainDiffsFile = $"{mainDasmDirectory}/{diff.DasmFile}";
+            string prDiffsFile = $"{prDasmDirectory}/{diff.DasmFile}";
 
             await job.LogAsync($"Generating diffs for {diff.Name}");
 

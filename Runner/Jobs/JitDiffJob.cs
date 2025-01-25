@@ -12,6 +12,9 @@ internal sealed class JitDiffJob : JobBase
     public const string DasmSubdirectory = "dasmset_1/base";
     public const string ExtraProjectsDirectory = "extra-projects";
 
+    private const string CombinedDasmMainDirectory = "diffs-main-combined";
+    private const string CombinedDasmPrDirectory = "diffs-pr-combined";
+
     public JitDiffJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
     protected override async Task RunJobCoreAsync()
@@ -239,10 +242,10 @@ internal sealed class JitDiffJob : JobBase
             PendingTasks.Enqueue(ZipAndUploadArtifactAsync("jit-diffs-pr", DiffsPrDirectory));
         }
 
-        CombineAllDiffs(DiffsMainDirectory, "diffs-main-combined");
-        CombineAllDiffs(DiffsPrDirectory, "diffs-pr-combined");
+        CombineAllDiffs(DiffsMainDirectory, CombinedDasmMainDirectory);
+        CombineAllDiffs(DiffsPrDirectory, CombinedDasmPrDirectory);
 
-        string diffAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this, "diffs-main-combined", "diffs-pr-combined");
+        string diffAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this, CombinedDasmMainDirectory, CombinedDasmPrDirectory);
 
         PendingTasks.Enqueue(UploadTextArtifactAsync("diff-frameworks.txt", diffAnalyzeSummary));
 
@@ -295,6 +298,8 @@ internal sealed class JitDiffJob : JobBase
         var (diffs, noisyDiffsRemoved) = await JitDiffUtils.GetDiffMarkdownAsync(
             this,
             JitDiffUtils.ParseDiffAnalyzeEntries(diffAnalyzeSummary, regressions),
+            CombinedDasmMainDirectory,
+            CombinedDasmPrDirectory,
             tryGetExtraInfo: null,
             replaceMethodName: name => name,
             maxCount: 20);

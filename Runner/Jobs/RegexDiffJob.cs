@@ -679,6 +679,8 @@ internal sealed class RegexDiffJob : JobBase
         var (diffs, noisyDiffsRemoved) = await JitDiffUtils.GetDiffMarkdownAsync(
             this,
             JitDiffUtils.ParseDiffAnalyzeEntries(diffAnalyzeSummary, regressions),
+            $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
+            $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
             tryGetExtraInfo,
             replaceName,
             maxCount: 1_000);
