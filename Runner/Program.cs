@@ -48,11 +48,11 @@ static async Task RunAsync(string[] args)
     })
     {
         DefaultRequestVersion = HttpVersion.Version20,
-        BaseAddress = new Uri("https://mihubot.xyz/api/RuntimeUtils/Jobs/"),
+        BaseAddress = new Uri("https://mihubot.xyz/api/RuntimeUtils/"),
         Timeout = TimeSpan.FromMinutes(1),
     };
 
-    var request = new HttpRequestMessage(HttpMethod.Get, $"Metadata/{jobId}");
+    var request = new HttpRequestMessage(HttpMethod.Get, $"Jobs/Metadata/{jobId}");
 
     if (Environment.GetEnvironmentVariable("RUNTIME_UTILS_TOKEN") is { Length: > 0 } authToken)
     {
@@ -76,6 +76,7 @@ static async Task RunAsync(string[] args)
         nameof(BenchmarkLibrariesJob) => new BenchmarkLibrariesJob(client, metadata),
         nameof(RegexDiffJob) => new RegexDiffJob(client, metadata),
         nameof(BackportJob) => new BackportJob(client, metadata),
+        nameof(CoreRootGenerationJob) => new CoreRootGenerationJob(client, metadata),
         var type => throw new NotSupportedException(type),
     };
 

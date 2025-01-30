@@ -45,4 +45,19 @@ internal static class GitHelper
 
         return lines;
     }
+
+    public static async Task<List<string>> ListCommitsAsync(JobBase job, int lastNDays, string workDir)
+    {
+        List<string> lines = [];
+
+        await job.RunProcessAsync("git",
+            $"log --pretty=format:%H --since={lastNDays}days",
+            lines,
+            workDir: workDir,
+            checkExitCode: false,
+            suppressOutputLogs: true,
+            suppressStartingLog: true);
+
+        return lines;
+    }
 }

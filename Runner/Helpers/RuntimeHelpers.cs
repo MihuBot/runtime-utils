@@ -14,6 +14,50 @@ internal static class RuntimeHelpers
         ? "-p:RunAnalyzers=false -p:ApiCompatValidateAssemblies=false"
         : "/p:RunAnalyzers=false /p:ApiCompatValidateAssemblies=false";
 
+    public static async Task CloneRuntimeMainAsync(JobBase job)
+    {
+        const string LogPrefix = "Setup runtime";
+
+        if (OperatingSystem.IsLinux())
+        {
+            string script =
+                $$$"""
+                set -e
+
+                git clone --no-tags --branch main --single-branch --progress https://github.com/dotnet/runtime runtime
+                cd runtime
+
+                git log -1
+                chmod 777 build.sh
+                git config --global user.email build@build.foo
+                git config --global user.name build
+
+                eng/common/native/install-dependencies.sh linux
+                """;
+
+            await job.LogAsync($"Using runtime setup script:\n{script}");
+            await File.WriteAllTextAsync("setup-runtime.sh", script);
+            await job.RunProcessAsync("bash", "-x setup-runtime.sh", logPrefix: LogPrefix);
+        }
+        else
+        {
+            string script =
+                $$$"""
+                git config --system core.longpaths true
+                git clone --no-tags --branch main --single-branch --progress https://github.com/dotnet/runtime runtime
+                cd runtime
+
+                git log -1
+                git config --global user.email build@build.foo
+                git config --global user.name build
+                """;
+
+            await job.LogAsync($"Using runtime setup script:\n{script}");
+            await File.WriteAllTextAsync("clone-runtime.bat", script);
+            await job.RunProcessAsync("clone-runtime.bat", string.Empty, logPrefix: LogPrefix);
+        }
+    }
+
     public static async Task CloneRuntimeAsync(JobBase job)
     {
         const string LogPrefix = "Setup runtime";
@@ -54,6 +98,7 @@ internal static class RuntimeHelpers
                 git config --system core.longpaths true
                 git clone --no-tags --branch {{{job.BaseBranch}}} --single-branch --progress https://github.com/{{{job.BaseRepo}}} runtime
                 cd runtime
+
                 git log -1
                 git config --global user.email build@build.foo
                 git config --global user.name build
@@ -134,15 +179,11 @@ internal static class RuntimeHelpers
         await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir /usr/lib/dotnet");
     }
 
-    public static async Task CopyReleaseArtifactsAsync(JobBase job, string branch, string destination)
+    public static async Task CopyReleaseArtifactsAsync(JobBase job, string logPrefix, string destination, string runtimeConfig = "Release")
     {
         AssertIsLinux();
 
-        string logPrefix = $"{branch} release";
-
-        string arch = JobBase.IsArm ? "arm64" : "x64";
-
-        await job.RunProcessAsync("cp", $"-r runtime/artifacts/bin/coreclr/linux.{arch}.Release/. {destination}", logPrefix: logPrefix);
+        await job.RunProcessAsync("cp", $"-r runtime/artifacts/bin/coreclr/linux.{JobBase.Arch}.{runtimeConfig}/. {destination}", logPrefix: logPrefix);
 
         const string BaseDirectory = "runtime/artifacts/bin/runtime";
 
@@ -151,7 +192,7 @@ internal static class RuntimeHelpers
             .Where(f => f.StartsWith("net", StringComparison.OrdinalIgnoreCase))
             .Where(f => f.Contains("Release", StringComparison.OrdinalIgnoreCase))
             .Where(f => f.Contains("linux", StringComparison.OrdinalIgnoreCase))
-            .Where(f => f.Contains(arch, StringComparison.OrdinalIgnoreCase))
+            .Where(f => f.Contains(JobBase.Arch, StringComparison.OrdinalIgnoreCase))
             .Single();
 
         await job.RunProcessAsync("cp", $"-r {BaseDirectory}/{folder}/. {destination}", logPrefix: logPrefix);

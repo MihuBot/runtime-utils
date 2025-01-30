@@ -99,7 +99,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             string fuzzerName = matchingFuzzers[i];
 
             int remainingFuzzers = matchingFuzzers.Length - i;
-            TimeSpan remainingTime = MaxJobDuration - ElapsedTime - TimeSpan.FromMinutes(5);
+            TimeSpan remainingTime = MaxRemainingTime - TimeSpan.FromMinutes(5);
             int durationSeconds = (int)(remainingTime / remainingFuzzers).TotalSeconds;
             durationSeconds = Math.Clamp(durationSeconds, 60, maxDurationPerFuzzer);
 

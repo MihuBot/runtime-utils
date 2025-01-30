@@ -5,26 +5,30 @@ using System.Threading.Channels;
 using System.IO.Compression;
 using Azure.Storage.Blobs;
 using System.Collections.Concurrent;
+using System.IO;
 
 namespace Runner;
 
 public abstract class JobBase
 {
     public static bool IsArm => RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
+    public static string Arch = IsArm ? "arm64" : "x64";
 
-    protected static readonly TimeSpan MaxJobDuration = TimeSpan.FromHours(5);
+    public readonly string JobId;
 
-    private readonly CancellationTokenSource _jobCts = new(MaxJobDuration);
-    private readonly string _jobId;
+    private readonly CancellationTokenSource _jobCts;
     private readonly Channel<string> _channel;
     private readonly Stopwatch _lastLogEntry = new();
     private HardwareInfo? _hardwareInfo;
     private volatile bool _completed;
     private readonly List<(string, string)> _sharedEnvVars = [];
 
-    protected readonly HttpClient HttpClient;
+    private readonly DateTime _maxEndTime;
     protected readonly DateTime StartTime;
     protected CancellationToken JobTimeout => _jobCts.Token;
+    protected TimeSpan MaxRemainingTime => _maxEndTime - DateTime.UtcNow;
+
+    protected readonly HttpClient HttpClient;
     public Dictionary<string, string> Metadata { get; }
     public readonly string OriginalWorkingDirectory = Environment.CurrentDirectory;
 
@@ -77,8 +81,11 @@ public abstract class JobBase
     {
         HttpClient = client;
         Metadata = metadata;
-        _jobId = metadata["JobId"];
+        JobId = metadata["JobId"];
         StartTime = new DateTime(long.Parse(Metadata["JobStartTime"]), DateTimeKind.Utc);
+        _maxEndTime = new DateTime(long.Parse(Metadata["JobMaxEndTime"]), DateTimeKind.Utc);
+
+        _jobCts = new CancellationTokenSource(MaxRemainingTime - TimeSpan.FromMinutes(3));
 
         _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(100_000)
         {
@@ -154,7 +161,7 @@ public abstract class JobBase
         }
         catch { }
 
-        await HttpClient.GetStringAsync($"Complete/{_jobId}", CancellationToken.None);
+        await HttpClient.GetStringAsync($"Jobs/Complete/{JobId}", CancellationToken.None);
     }
 
     protected async Task WaitForPendingTasksAsync()
@@ -206,13 +213,17 @@ public abstract class JobBase
 
         try
         {
-            TimeSpan elapsed = ElapsedTime;
-            int hours = elapsed.Hours;
-            int minutes = elapsed.Minutes;
-            int seconds = elapsed.Seconds;
-            await _channel.Writer.WriteAsync($"[{hours:D2}:{minutes:D2}:{seconds:D2}] {message}", JobTimeout);
+            await _channel.Writer.WriteAsync($"[{FormatElapsedTime(ElapsedTime)}] {message}", JobTimeout);
         }
         catch { }
+    }
+
+    protected static string FormatElapsedTime(TimeSpan elapsed)
+    {
+        int hours = elapsed.Hours;
+        int minutes = elapsed.Minutes;
+        int seconds = elapsed.Seconds;
+        return $"{hours:D2}:{minutes:D2}:{seconds:D2}";
     }
 
     private async Task ErrorAsync(string message)
@@ -221,7 +232,7 @@ public abstract class JobBase
         {
             try
             {
-                await PostAsJsonAsync("Logs", new string[] { $"ERROR: {message}" });
+                await PostJobsJsonAsync("Logs", new string[] { $"ERROR: {message}" });
             }
             finally
             {
@@ -286,7 +297,7 @@ public abstract class JobBase
                     messages.Add(message);
                 }
 
-                await PostAsJsonAsync("Logs", messages);
+                await PostJobsJsonAsync("Logs", messages);
                 messages.Clear();
             }
         }
@@ -448,19 +459,26 @@ public abstract class JobBase
         using StreamContent content = new(fs);
 
         using var response = await HttpClient.PostAsync(
-            $"Artifact/{_jobId}/{Uri.EscapeDataString(name)}",
+            $"Jobs/Artifact/{JobId}/{Uri.EscapeDataString(name)}",
             content,
             JobTimeout);
     }
 
-    private async Task PostAsJsonAsync(string path, object? value, string? queryArgs = null, int attemptsRemaining = 4)
+    protected async Task<T> SendAsyncCore<T>(HttpMethod method, string uri, HttpContent? content = null, Func<HttpResponseMessage, Task<T>>? responseFunc = null)
     {
         int delayMs = 1_000;
+        int attemptsRemaining = 4;
+
         while (true)
         {
             try
             {
-                using var response = await HttpClient.PostAsJsonAsync($"{path}/{_jobId}{queryArgs}", value, JobTimeout);
+                var request = new HttpRequestMessage(method, uri)
+                {
+                    Content = content,
+                };
+
+                using HttpResponseMessage response = await HttpClient.SendAsync(request, JobTimeout);
 
                 if (response.Headers.Contains("X-Job-Completed"))
                 {
@@ -468,13 +486,18 @@ public abstract class JobBase
                 }
 
                 response.EnsureSuccessStatusCode();
-                return;
+
+                return responseFunc is null
+                    ? default!
+                    : await responseFunc(response);
             }
             catch (Exception ex) when (!JobTimeout.IsCancellationRequested)
             {
-                await LogAsync($"Failed to post resource '{path}': {ex}");
+                await LogAsync($"Failed to {method.Method} resource '{uri}': {ex}");
 
-                if (--attemptsRemaining == 0)
+                attemptsRemaining--;
+
+                if (attemptsRemaining == 0)
                 {
                     throw;
                 }
@@ -483,6 +506,11 @@ public abstract class JobBase
                 delayMs *= 2;
             }
         }
+    }
+
+    private async Task PostJobsJsonAsync(string path, object? value, string? queryArgs = null)
+    {
+        await SendAsyncCore<object>(HttpMethod.Post, $"Jobs/{path}/{JobId}{queryArgs}", JsonContent.Create(value));
     }
 
     protected int GetTotalSystemMemoryGB()
@@ -634,7 +662,7 @@ public abstract class JobBase
                 await LogAsync($"First hardware info: CpuCoresAvailable={coreCount} MemoryAvailableGB={totalGB}");
             }
 
-            await PostAsJsonAsync("SystemInfo", new
+            await PostJobsJsonAsync("SystemInfo", new
             {
                 CpuUsage = totalCpuUsage,
                 CpuCoresAvailable = coreCount,
