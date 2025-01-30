@@ -64,10 +64,10 @@ internal sealed class CoreRootGenerationJob : JobBase
 
             string logPrefix = $"{commit[..20]} {type}";
 
-            CoreRootEntry? entry = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}{archOsType}", content: null,
-                async response => await response.Content.ReadFromJsonAsync<CoreRootEntry>(JobTimeout));
+            bool hasEntry = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}{archOsType}", content: null,
+                response => Task.FromResult(response.StatusCode == HttpStatusCode.OK));
 
-            if (entry is not null)
+            if (hasEntry)
             {
                 await LogAsync($"[{logPrefix}] Skipping build (CoreRoot already exists)");
                 continue;
@@ -187,6 +187,4 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         return archiveName;
     }
-
-    private sealed class CoreRootEntry { }
 }
