@@ -122,21 +122,26 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             throw new Exception("Failed to get the core run entries");
         }
 
+        for (int i = 0; i < entries.Length; i++)
+        {
+            CoreRootEntry entry = entries[i];
+            entry.Directory = $"cr-{i.ToString().PadLeft(4, '0')}-{entry.Sha}";
+        }
+
         await LogAsync($"Downloading {entries.Length} CoreRoots ...");
 
         await Parallel.ForEachAsync(entries, async (entry, _) =>
         {
-            string directory = $"coreroot-{entry.Sha}";
-            Directory.CreateDirectory(directory);
+            Directory.CreateDirectory(entry.Directory!);
 
             using var archive = new TempFile("7z");
             byte[] archiveBytes = await SendAsyncCore(HttpMethod.Get, entry.Url!, content: null, async response => await response.Content.ReadAsByteArrayAsync());
             File.WriteAllBytes(archive.Path, archiveBytes);
 
-            await RunProcessAsync("7z", $"x {archive.Path} -o{directory} ", logPrefix: $"Extract {entry.Sha}");
+            await RunProcessAsync("7z", $"x {archive.Path} -o{entry.Directory} ", logPrefix: $"Extract {entry.Sha}");
         });
 
-        return entries.Select(entry => $"coreroot-{entry.Sha}/corerun").ToArray();
+        return entries.Select(entry => $"{entry.Directory}/corerun").ToArray();
     }
 
     private async Task RunBenchmarksAsync(string[] coreRunPaths)
@@ -264,11 +269,8 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     private sealed class CoreRootEntry
     {
         public string? Sha { get; set; }
-        public string? Arch { get; set; }
-        public string? Os { get; set; }
-        public string? Type { get; set; }
         public string? Url { get; set; }
-        public DateTime CreatedOn { get; set; }
+        public string? Directory { get; set; }
     }
 
     [GeneratedRegex(@"^benchmark ([^ ]+)", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
@@ -299,6 +301,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     [GeneratedRegex(@"job = Job\..*?;", RegexOptions.Singleline)]
     private static partial Regex RecommendedConfigJobTypeRegex();
 
-    [GeneratedRegex("/coreroot-([a-f0-9]{40})/corerun")]
+    [GeneratedRegex("/cr-[0-9]+-([a-f0-9]{40})/corerun")]
     private static partial Regex CommitCoreRunReplacementRegex();
 }
