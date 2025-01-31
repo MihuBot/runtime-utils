@@ -8,26 +8,42 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     {
         await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
 
-        await CloneRuntimeAndPerformanceAndSetupToolsAsync();
+        Task clonePerformanceTask = CloneDotnetPerformanceAndSetupToolsAsync();
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: false);
+        string[] coreRuns;
 
-        await RunProcessAsync("git", "switch pr", workDir: "runtime");
+        if (BenchmarkWithCompareRangeRegex().Match(CustomArguments) is { Success: true } rangeMatch)
+        {
+            coreRuns = await DownloadCoreRootsAsync(rangeMatch.Groups[2].Value);
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false);
+            await clonePerformanceTask;
+        }
+        else
+        {
+            await RuntimeHelpers.CloneRuntimeAsync(this);
 
-        await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+            await clonePerformanceTask;
+
+            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: false);
+
+            await RunProcessAsync("git", "switch pr", workDir: "runtime");
+
+            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false);
+
+            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+
+            coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
+        }
+
         await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
 
         await WaitForPendingTasksAsync();
 
-        await RunBenchmarksAsync();
+        await RunBenchmarksAsync(coreRuns);
     }
 
-    private async Task CloneRuntimeAndPerformanceAndSetupToolsAsync()
+    private async Task CloneDotnetPerformanceAndSetupToolsAsync()
     {
-        Task cloneRuntimeTask = RuntimeHelpers.CloneRuntimeAsync(this);
-
         Task clonePerformanceTask = Task.Run(async () =>
         {
             (string repo, string branch) = GetDotnetPerformanceRepoSource();
@@ -71,7 +87,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         await setupZipAndWgetTask;
         await clonePerformanceTask;
-        await cloneRuntimeTask;
 
         (string Repo, string Branch) GetDotnetPerformanceRepoSource()
         {
@@ -91,7 +106,42 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         }
     }
 
-    private async Task RunBenchmarksAsync()
+    private async Task<string[]> DownloadCoreRootsAsync(string range)
+    {
+        string os = OperatingSystem.IsWindows() ? "windows" : "linux";
+        string archOsType = $"&arch={Arch}&os={os}&type=release";
+
+        CoreRootEntry[]? entries = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/List?range={range}{archOsType}", content: null,
+            async response => await response.Content.ReadFromJsonAsync<CoreRootEntry[]>());
+
+        if (entries is null)
+        {
+            throw new Exception("Failed to get the core run entries");
+        }
+
+        await LogAsync($"Downloading {entries.Length} CoreRoots ...");
+
+        List<string> coreRuns = [];
+
+        await Parallel.ForEachAsync(entries, async (entry, _) =>
+        {
+            string directory = $"coreroot-{entry.Sha}";
+            Directory.CreateDirectory(directory);
+
+            lock (coreRuns)
+                coreRuns.Add(Path.Combine(directory, "corerun"));
+
+            using var archive = new TempFile("7z");
+            byte[] archiveBytes = await SendAsyncCore(HttpMethod.Get, entry.Url!, content: null, async response => await response.Content.ReadAsByteArrayAsync());
+            File.WriteAllBytes(archive.Path, archiveBytes);
+
+            await RunProcessAsync("7z", $"x {archive.Path} -o{directory} ", logPrefix: $"Extract {entry.Sha}");
+        });
+
+        return coreRuns.ToArray();
+    }
+
+    private async Task RunBenchmarksAsync(string[] coreRunPaths)
     {
         const string HiddenColumns = "Job StdDev RatioSD Median Min Max OutlierMode MemoryRandomization Gen0 Gen1 Gen2";
 
@@ -103,15 +153,14 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             filter = $"*{filter}*";
         }
 
-        int dotnetVersion = RuntimeHelpers.GetDotnetVersion();
+        int dotnetVersion = RuntimeHelpers.GetDotnetVersion("performance");
 
-        string corerunMain = Path.GetFullPath("artifacts-main/corerun");
-        string corerunPr = Path.GetFullPath("artifacts-pr/corerun");
+        string coreRuns = string.Join(' ', coreRunPaths.Select(Path.GetFullPath));
 
         string? artifactsDir = null;
 
         await RunProcessAsync("dotnet",
-            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {corerunMain} {corerunPr}",
+            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns}",
             workDir: "performance/src/benchmarks/micro",
             processLogs: line =>
             {
@@ -193,6 +242,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
                 line = line.Replace("/artifacts-main/corerun", "Main");
                 line = line.Replace("/artifacts-pr/corerun", "PR");
+                line = CommitCoreRunReplacementRegex().Replace(line, match => match.Groups[1].ValueSpan[..10].ToString());
 
                 result.AppendLine(line);
             }
@@ -208,8 +258,22 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         await UploadTextArtifactAsync("results.md", combinedMarkdown);
     }
 
+    private sealed class CoreRootEntry
+    {
+        public string? Sha { get; set; }
+        public string? Arch { get; set; }
+        public string? Os { get; set; }
+        public string? Type { get; set; }
+        public string? Url { get; set; }
+        public DateTime CreatedOn { get; set; }
+    }
+
     [GeneratedRegex(@"^benchmark ([^ ]+)", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex FilterNameRegex();
+
+    // @MihuBot benchmark GetUnicodeCategory https://github.com/dotnet/runtime/compare/4bb0bcd9b5c47df97e51b462d8204d66c7d470fc...c74440f8291edd35843f3039754b887afe61766e
+    [GeneratedRegex(@"^benchmark ([^ ]+) https:\/\/github\.com\/dotnet\/runtime\/compare\/([a-f0-9]{40}\.\.\.[a-f0-9]{40})", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    private static partial Regex BenchmarkWithCompareRangeRegex();
 
     // ** Remained 420 (74.5 %) benchmark(s) to run. Estimated finish 2024-06-20 2:54 (0h 40m from now) **
     // 420    74.5    0h 40m
@@ -231,4 +295,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     // Matches https://github.com/dotnet/performance/blob/d0d7ea34e98ca19f8264a17abe05ef6f73e888ba/src/harness/BenchmarkDotNet.Extensions/RecommendedConfig.cs#L33-L38
     [GeneratedRegex(@"job = Job\..*?;", RegexOptions.Singleline)]
     private static partial Regex RecommendedConfigJobTypeRegex();
+
+    [GeneratedRegex("/([a-f0-9]{40})/corerun")]
+    private static partial Regex CommitCoreRunReplacementRegex();
 }
