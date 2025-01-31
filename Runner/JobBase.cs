@@ -584,19 +584,26 @@ public abstract class JobBase
         {
             try
             {
-                const string NvmeDevicePath = "/dev/nvme1n1";
-                const string NewWorkDir = "/mnt/runner-nvme";
                 const string LogPrefix = "Prepare NVME";
 
-                await RunProcessAsync("mkfs", $"-t xfs {NvmeDevicePath}", logPrefix: LogPrefix);
-                await RunProcessAsync("mkdir", NewWorkDir, logPrefix: LogPrefix);
-                await RunProcessAsync("mount", $"{NvmeDevicePath} {NewWorkDir}", logPrefix: LogPrefix);
+                List<string> output = [];
+                await RunProcessAsync("nvme", "list", output, LogPrefix);
 
-                Environment.CurrentDirectory = NewWorkDir;
+                if (output.LastOrDefault(line => line.StartsWith("/dev/nvme", StringComparison.OrdinalIgnoreCase)) is { } nvmeLine)
+                {
+                    string nvmeDevicePath = nvmeLine.Split([], 2)[0];
+                    const string NewWorkDir = "/mnt/runner-nvme";
 
-                await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {NewWorkDir}");
+                    await RunProcessAsync("mkfs", $"-t xfs {nvmeDevicePath}", logPrefix: LogPrefix);
+                    await RunProcessAsync("mkdir", NewWorkDir, logPrefix: LogPrefix);
+                    await RunProcessAsync("mount", $"{nvmeDevicePath} {NewWorkDir}", logPrefix: LogPrefix);
 
-                return NewWorkDir;
+                    Environment.CurrentDirectory = NewWorkDir;
+
+                    await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {NewWorkDir}");
+
+                    return NewWorkDir;
+                }
             }
             catch (Exception ex)
             {
