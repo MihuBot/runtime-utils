@@ -124,15 +124,10 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         await LogAsync($"Downloading {entries.Length} CoreRoots ...");
 
-        List<string> coreRuns = [];
-
         await Parallel.ForEachAsync(entries, async (entry, _) =>
         {
             string directory = $"coreroot-{entry.Sha}";
             Directory.CreateDirectory(directory);
-
-            lock (coreRuns)
-                coreRuns.Add(Path.Combine(directory, "corerun"));
 
             using var archive = new TempFile("7z");
             byte[] archiveBytes = await SendAsyncCore(HttpMethod.Get, entry.Url!, content: null, async response => await response.Content.ReadAsByteArrayAsync());
@@ -141,7 +136,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             await RunProcessAsync("7z", $"x {archive.Path} -o{directory} ", logPrefix: $"Extract {entry.Sha}");
         });
 
-        return coreRuns.ToArray();
+        return entries.Select(entry => $"coreroot-{entry.Sha}/corerun").ToArray();
     }
 
     private async Task RunBenchmarksAsync(string[] coreRunPaths)
