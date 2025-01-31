@@ -245,7 +245,12 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
                 line = line.Replace("/artifacts-main/corerun", "Main");
                 line = line.Replace("/artifacts-pr/corerun", "PR");
-                line = CommitCoreRunReplacementRegex().Replace(line, match => match.Groups[1].ValueSpan[..10].ToString());
+
+                line = CommitCoreRunReplacementRegex().Replace(line, match =>
+                {
+                    ReadOnlySpan<char> sha = match.Groups[1].ValueSpan;
+                    return $"[{sha[..10].ToString()}](https://github.com/dotnet/runtime/commit/{sha})";
+                });
 
                 result.AppendLine(line);
             }
