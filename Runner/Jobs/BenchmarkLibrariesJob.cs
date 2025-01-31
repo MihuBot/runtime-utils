@@ -14,9 +14,9 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         if (BenchmarkWithCompareRangeRegex().Match(CustomArguments) is { Success: true } rangeMatch)
         {
-            coreRuns = await DownloadCoreRootsAsync(rangeMatch.Groups[2].Value);
-
             await clonePerformanceTask;
+
+            coreRuns = await DownloadCoreRootsAsync(rangeMatch.Groups[2].Value);
         }
         else
         {
@@ -80,12 +80,12 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             }
         });
 
-        Task setupZipAndWgetTask = RunProcessAsync("apt-get", "install -y zip wget", logPrefix: "Setup zip & wget");
+        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full", logPrefix: "Install tools");
 
         Directory.CreateDirectory("artifacts-main");
         Directory.CreateDirectory("artifacts-pr");
 
-        await setupZipAndWgetTask;
+        await aptGetTask;
         await clonePerformanceTask;
 
         (string Repo, string Branch) GetDotnetPerformanceRepoSource()
