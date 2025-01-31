@@ -249,7 +249,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 line = CommitCoreRunReplacementRegex().Replace(line, match =>
                 {
                     ReadOnlySpan<char> sha = match.Groups[1].ValueSpan;
-                    return $"[{sha[..10].ToString()}](https://github.com/dotnet/runtime/commit/{sha})";
+                    return $"[`{sha[..10].ToString()}`](https://github.com/dotnet/runtime/commit/{sha})";
                 });
 
                 result.AppendLine(line);
