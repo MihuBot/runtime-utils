@@ -12,7 +12,11 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         await CloneRuntimeAndSetupToolsAsync();
 
-        await BuildCoreRootsAsync();
+        while (await BuildCoreRootsAsync())
+        {
+            await RunProcessAsync("git", "checkout main", workDir: "runtime");
+            await RunProcessAsync("git", "pull origin", workDir: "runtime");
+        }
     }
 
     private async Task CloneRuntimeAndSetupToolsAsync()
@@ -25,17 +29,25 @@ internal sealed class CoreRootGenerationJob : JobBase
         await cloneRuntimeTask;
     }
 
-    private async Task BuildCoreRootsAsync()
+    private async Task<bool> BuildCoreRootsAsync()
     {
         const int LastNDays = 60;
         string type = "release";
         string os = OperatingSystem.IsWindows() ? "windows" : "linux";
-        string archOsType = $"&arch={Arch}&os={os}&type={type}";
+        string archOsType = $"arch={Arch}&os={os}&type={type}";
 
         List<string> commits = await GitHelper.ListCommitsAsync(this, LastNDays, "runtime");
         commits.Reverse();
 
         await LogAsync($"Found {commits.Count} commits in the last {LastNDays} days");
+
+        HashSet<string?> existingCoreRoots;
+        {
+            var existingEntries = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/All?{archOsType}", content: null,
+                async response => await response.Content.ReadFromJsonAsync<BenchmarkLibrariesJob.CoreRootEntry[]>());
+            existingEntries ??= [];
+            existingCoreRoots = existingEntries.Select(e => e.Sha).ToHashSet();
+        }
 
         var container = new BlobContainerClient(new Uri(Metadata["CoreRootSasUri"]));
 
@@ -46,7 +58,7 @@ internal sealed class CoreRootGenerationJob : JobBase
             if (MaxRemainingTime.TotalHours < 1)
             {
                 await LogAsync("Approaching job duration limit. Stopping ...");
-                break;
+                return false;
             }
 
             if (PendingTasks.Count > 5)
@@ -72,16 +84,18 @@ internal sealed class CoreRootGenerationJob : JobBase
                 continue;
             }
 
-            string logPrefix = $"{commit[..20]} {type}";
+            bool hasEntry = existingCoreRoots.Contains(commit);
 
-            bool hasEntry = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}{archOsType}", content: null,
+            hasEntry = hasEntry || await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}&{archOsType}", content: null,
                 response => Task.FromResult(response.StatusCode == HttpStatusCode.OK));
 
             if (hasEntry)
             {
-                await LogAsync($"[{logPrefix}] Skipping build (CoreRoot already exists)");
+                await LogAsync($"[{commit}] Skipping build (CoreRoot already exists)");
                 continue;
             }
+
+            string logPrefix = $"{commit[..20]} {type}";
 
             if (!await TryBuildAsync(logPrefix, type))
             {
@@ -112,13 +126,15 @@ internal sealed class CoreRootGenerationJob : JobBase
                 await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
                 var blob = container.GetBlobClient($"{commit}_{Arch}_{os}_{type}.7z");
                 await blob.UploadAsync(archivePath, overwrite: true, JobTimeout);
-                await SendAsyncCore<object>(HttpMethod.Get, $"CoreRoot/Save?jobId={JobId}&sha={commit}{archOsType}&blobName={blob.Name}");
+                await SendAsyncCore<object>(HttpMethod.Get, $"CoreRoot/Save?jobId={JobId}&sha={commit}&{archOsType}&blobName={blob.Name}");
 
                 File.Delete(archivePath);
 
                 await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
             }));
         }
+
+        return builtThisSession > 0;
 
         static bool CanSkipBuilding(List<string> changedFiles)
         {

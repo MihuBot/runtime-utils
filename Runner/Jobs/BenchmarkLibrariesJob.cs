@@ -266,7 +266,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         await UploadTextArtifactAsync("results.md", combinedMarkdown);
     }
 
-    private sealed class CoreRootEntry
+    public sealed class CoreRootEntry
     {
         public string? Sha { get; set; }
         public string? Url { get; set; }
