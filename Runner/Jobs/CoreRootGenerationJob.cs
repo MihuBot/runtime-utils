@@ -39,6 +39,8 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         var container = new BlobContainerClient(new Uri(Metadata["CoreRootSasUri"]));
 
+        int builtThisSession = 0;
+
         for (int i = 0; i < commits.Count; i++)
         {
             if (MaxRemainingTime.TotalHours < 1)
@@ -53,7 +55,9 @@ internal sealed class CoreRootGenerationJob : JobBase
                 await WaitForPendingTasksAsync(2);
             }
 
-            LastProgressSummary = $"Processing commit {i + 1}/{commits.Count}";
+            string progressMessage = $"Processing commit {i + 1}/{commits.Count}. Built {builtThisSession} in this session.";
+            LastProgressSummary = progressMessage;
+            await LogAsync(progressMessage);
 
             Stopwatch stopwatch = Stopwatch.StartNew();
 
@@ -99,6 +103,7 @@ internal sealed class CoreRootGenerationJob : JobBase
             }
 
             string artifactsDir = await CopyArtifactsAsync(logPrefix, commit, type);
+            builtThisSession++;
 
             PendingTasks.Enqueue(Task.Run(async () =>
             {
