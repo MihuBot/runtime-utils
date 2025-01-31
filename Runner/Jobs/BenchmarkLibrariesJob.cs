@@ -92,7 +92,8 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             foreach (string arg in CustomArguments.Split(' '))
             {
-                if (Uri.TryCreate(arg, UriKind.Absolute, out Uri? uri) &&
+                if (!arg.Contains("/compare/", StringComparison.OrdinalIgnoreCase) &&
+                    Uri.TryCreate(arg, UriKind.Absolute, out Uri? uri) &&
                     uri.IsAbsoluteUri &&
                     uri.Scheme == Uri.UriSchemeHttps &&
                     GitHubBranchRegex().Match(arg) is { Success: true } match)
