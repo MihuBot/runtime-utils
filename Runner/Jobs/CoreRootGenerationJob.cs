@@ -47,6 +47,12 @@ internal sealed class CoreRootGenerationJob : JobBase
                 break;
             }
 
+            if (PendingTasks.Count > 5)
+            {
+                await LogAsync("Waiting for pending tasks before continuing ...");
+                await WaitForPendingTasksAsync(2);
+            }
+
             LastProgressSummary = $"Processing commit {i + 1}/{commits.Count}";
 
             Stopwatch stopwatch = Stopwatch.StartNew();
@@ -92,16 +98,21 @@ internal sealed class CoreRootGenerationJob : JobBase
                 }
             }
 
-            string archivePath = await CompressArtifactsAsync(logPrefix, commit, type);
+            string artifactsDir = await CopyArtifactsAsync(logPrefix, commit, type);
 
-            await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
-            var blob = container.GetBlobClient($"{commit}_{Arch}_{os}_{type}.7z");
-            await blob.UploadAsync(archivePath, overwrite: true, JobTimeout);
-            await SendAsyncCore<object>(HttpMethod.Get, $"CoreRoot/Save?jobId={JobId}&sha={commit}{archOsType}&blobName={blob.Name}");
+            PendingTasks.Enqueue(Task.Run(async () =>
+            {
+                string archivePath = await CompressArtifactsAsync(logPrefix, type, artifactsDir);
 
-            File.Delete(archivePath);
+                await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
+                var blob = container.GetBlobClient($"{commit}_{Arch}_{os}_{type}.7z");
+                await blob.UploadAsync(archivePath, overwrite: true, JobTimeout);
+                await SendAsyncCore<object>(HttpMethod.Get, $"CoreRoot/Save?jobId={JobId}&sha={commit}{archOsType}&blobName={blob.Name}");
 
-            await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
+                File.Delete(archivePath);
+
+                await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
+            }));
         }
 
         static bool CanSkipBuilding(List<string> changedFiles)
@@ -155,7 +166,7 @@ internal sealed class CoreRootGenerationJob : JobBase
         }
     }
 
-    private async Task<string> CompressArtifactsAsync(string logPrefix, string commit, string type)
+    private async Task<string> CopyArtifactsAsync(string logPrefix, string commit, string type)
     {
         await LogAsync($"[{logPrefix}] Compressing {type} artifacts ...");
 
@@ -177,6 +188,13 @@ internal sealed class CoreRootGenerationJob : JobBase
                 File.Delete(file);
             }
         }
+
+        return artifactsDir;
+    }
+
+    private async Task<string> CompressArtifactsAsync(string logPrefix, string type, string artifactsDir)
+    {
+        await LogAsync($"[{logPrefix}] Compressing {type} artifacts ...");
 
         string archiveName = $"{artifactsDir}.7z";
 

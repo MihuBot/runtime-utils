@@ -167,9 +167,9 @@ public abstract class JobBase
         await HttpClient.GetStringAsync($"Jobs/Complete/{JobId}", CancellationToken.None);
     }
 
-    protected async Task WaitForPendingTasksAsync()
+    protected async Task WaitForPendingTasksAsync(int count = int.MaxValue)
     {
-        while (PendingTasks.TryDequeue(out Task? task))
+        while (--count >= 0 && PendingTasks.TryDequeue(out Task? task))
         {
             await task;
         }
