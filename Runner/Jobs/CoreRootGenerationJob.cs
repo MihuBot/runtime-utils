@@ -31,15 +31,16 @@ internal sealed class CoreRootGenerationJob : JobBase
 
     private async Task<bool> BuildCoreRootsAsync()
     {
-        const int LastNDays = 60;
         string type = "release";
         string os = OperatingSystem.IsWindows() ? "windows" : "linux";
         string archOsType = $"arch={Arch}&os={os}&type={type}";
 
-        List<string> commits = await GitHelper.ListCommitsAsync(this, LastNDays, "runtime");
+        int lastNDays = int.Parse(GetArgument(nameof(lastNDays), "60"));
+
+        List<string> commits = await GitHelper.ListCommitsAsync(this, lastNDays, "runtime");
         commits.Reverse();
 
-        await LogAsync($"Found {commits.Count} commits in the last {LastNDays} days");
+        await LogAsync($"Found {commits.Count} commits in the last {lastNDays} days");
 
         HashSet<string?> existingCoreRoots;
         {
