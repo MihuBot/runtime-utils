@@ -584,14 +584,19 @@ public abstract class JobBase
         {
             try
             {
-                string newWorkDir = Path.Combine("/mnt", "runner");
-                Directory.CreateDirectory(newWorkDir);
+                const string NvmeDevicePath = "/dev/nvme1n1";
+                const string NewWorkDir = "/mnt/runner-nvme";
+                const string LogPrefix = "Prepare NVME";
 
-                Environment.CurrentDirectory = newWorkDir;
+                await RunProcessAsync("mkfs", $"-t xfs {NvmeDevicePath}", logPrefix: LogPrefix);
+                await RunProcessAsync("mkdir", NewWorkDir, logPrefix: LogPrefix);
+                await RunProcessAsync("mount", $"{NvmeDevicePath} {NewWorkDir}", logPrefix: LogPrefix);
 
-                await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {newWorkDir}");
+                Environment.CurrentDirectory = NewWorkDir;
 
-                return newWorkDir;
+                await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {NewWorkDir}");
+
+                return NewWorkDir;
             }
             catch (Exception ex)
             {
