@@ -580,20 +580,39 @@ public abstract class JobBase
             }
         }
 
+        if (OperatingSystem.IsLinux())
+        {
+            try
+            {
+                string newWorkDir = Path.Combine("/mnt", "runner");
+                Directory.CreateDirectory(newWorkDir);
+
+                Environment.CurrentDirectory = newWorkDir;
+
+                await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {newWorkDir}");
+
+                return newWorkDir;
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"Failed to apply new working directory: {ex}");
+            }
+        }
+
         try
         {
             DriveInfo[] drives = DriveInfo.GetDrives()
                 .Where(d => d.IsReady)
                 .ToArray();
 
-            await LogAsync($"Drives available: {string.Join(", ", drives.Select(
+            await LogAsync($"Drives available:\n{string.Join("\n", drives.Select(
                 d => $"AvailableGB={d.AvailableFreeSpace >> 30} Path={d.RootDirectory.FullName}"))}");
 
             if (drives.Length > 1)
             {
                 DriveInfo drive = drives.MaxBy(d => d.AvailableFreeSpace)!;
 
-                string newWorkDir = Path.Combine(drive.RootDirectory.FullName, "runner-dir");
+                string newWorkDir = Path.Combine(drive.RootDirectory.FullName, "runner");
                 Directory.CreateDirectory(newWorkDir);
 
                 Environment.CurrentDirectory = newWorkDir;
