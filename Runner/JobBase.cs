@@ -5,7 +5,6 @@ using System.Threading.Channels;
 using System.IO.Compression;
 using Azure.Storage.Blobs;
 using System.Collections.Concurrent;
-using System.IO;
 
 namespace Runner;
 
@@ -335,6 +334,14 @@ public abstract class JobBase
         CancellationToken cancellationToken = default)
     {
         processLogs ??= i => i;
+
+        var originalLogsCallback = processLogs;
+        processLogs = line =>
+        {
+            line = line.Replace(JobId, "<REDACTED>", StringComparison.OrdinalIgnoreCase);
+            line = originalLogsCallback(line);
+            return line;
+        };
 
         if (logPrefix is not null)
         {
