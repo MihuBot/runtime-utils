@@ -219,7 +219,7 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         string archiveName = $"{artifactsDir}.7z";
 
-        await RunProcessAsync("7z", $"a -mx9 -md512m {archiveName} .", logPrefix: logPrefix, workDir: artifactsDir);
+        await RunProcessAsync("7z", $"a -mx9 -md512m {archiveName} .", logPrefix: logPrefix, workDir: artifactsDir, priority: ProcessPriorityClass.BelowNormal);
         File.Move(Path.Combine(artifactsDir, archiveName), archiveName);
 
         Directory.Delete(artifactsDir, recursive: true);
