@@ -159,7 +159,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         string? artifactsDir = null;
 
-        await RunProcessAsync("dotnet",
+        await RunProcessAsync("/usr/lib/dotnet/dotnet",
             $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns}",
             workDir: "performance/src/benchmarks/micro",
             processLogs: line =>
