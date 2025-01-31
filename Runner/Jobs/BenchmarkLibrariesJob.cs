@@ -16,6 +16,8 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             await clonePerformanceTask;
 
+            PendingTasks.Enqueue(RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json"));
+
             coreRuns = await DownloadCoreRootsAsync(rangeMatch.Groups[2].Value);
         }
         else
@@ -32,10 +34,10 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
             await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
 
+            await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
+
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
-
-        await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
 
         await WaitForPendingTasksAsync();
 
