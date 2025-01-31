@@ -542,39 +542,6 @@ public abstract class JobBase
 
     private async Task<string?> ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore()
     {
-        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-        {
-            try
-            {
-                DriveInfo[] drives = DriveInfo.GetDrives()
-                    .Where(d => d.IsReady)
-                    .ToArray();
-
-                await LogAsync($"Drives available: {string.Join(", ", drives.Select(
-                    d => $"AvailableGB={d.AvailableFreeSpace >> 30} Path={d.RootDirectory.FullName}"))}");
-
-                if (drives.Length > 1)
-                {
-                    DriveInfo drive = drives.MaxBy(d => d.AvailableFreeSpace)!;
-
-                    string newWorkDir = Path.Combine(drive.RootDirectory.FullName, "runner-dir");
-                    Directory.CreateDirectory(newWorkDir);
-
-                    Environment.CurrentDirectory = newWorkDir;
-
-                    await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {newWorkDir}");
-
-                    return newWorkDir;
-                }
-            }
-            catch (Exception ex)
-            {
-                await LogAsync($"Failed to apply new working directory: {ex}");
-            }
-
-            return null;
-        }
-
         Stopwatch s = Stopwatch.StartNew();
 
         do
@@ -586,11 +553,11 @@ public abstract class JobBase
 
             await Task.Delay(10);
         }
-        while (s.Elapsed.TotalSeconds < 5);
+        while (s.Elapsed.TotalSeconds < 10);
 
         int availableRamGB = GetTotalSystemMemoryGB();
 
-        if (availableRamGB >= 30)
+        if (OperatingSystem.IsLinux() && availableRamGB >= 30)
         {
             try
             {
@@ -611,6 +578,34 @@ public abstract class JobBase
             {
                 await LogAsync($"Failed to apply new working directory: {ex}");
             }
+        }
+
+        try
+        {
+            DriveInfo[] drives = DriveInfo.GetDrives()
+                .Where(d => d.IsReady)
+                .ToArray();
+
+            await LogAsync($"Drives available: {string.Join(", ", drives.Select(
+                d => $"AvailableGB={d.AvailableFreeSpace >> 30} Path={d.RootDirectory.FullName}"))}");
+
+            if (drives.Length > 1)
+            {
+                DriveInfo drive = drives.MaxBy(d => d.AvailableFreeSpace)!;
+
+                string newWorkDir = Path.Combine(drive.RootDirectory.FullName, "runner-dir");
+                Directory.CreateDirectory(newWorkDir);
+
+                Environment.CurrentDirectory = newWorkDir;
+
+                await LogAsync($"Changed working directory from {OriginalWorkingDirectory} to {newWorkDir}");
+
+                return newWorkDir;
+            }
+        }
+        catch (Exception ex)
+        {
+            await LogAsync($"Failed to apply new working directory: {ex}");
         }
 
         return null;
