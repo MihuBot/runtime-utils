@@ -299,6 +299,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     [GeneratedRegex(@"job = Job\..*?;", RegexOptions.Singleline)]
     private static partial Regex RecommendedConfigJobTypeRegex();
 
-    [GeneratedRegex("/([a-f0-9]{40})/corerun")]
+    [GeneratedRegex("/coreroot-([a-f0-9]{40})/corerun")]
     private static partial Regex CommitCoreRunReplacementRegex();
 }
