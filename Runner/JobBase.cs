@@ -12,6 +12,7 @@ public abstract class JobBase
 {
     public static bool IsArm => RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
     public static string Arch = IsArm ? "arm64" : "x64";
+    public static string Os => OperatingSystem.IsWindows() ? "windows" : "linux";
 
     public readonly string JobId;
 
@@ -475,7 +476,7 @@ public abstract class JobBase
             JobTimeout);
     }
 
-    protected async Task<T> SendAsyncCore<T>(HttpMethod method, string uri, HttpContent? content = null, Func<HttpResponseMessage, Task<T>>? responseFunc = null)
+    public async Task<T> SendAsyncCore<T>(HttpMethod method, string uri, HttpContent? content = null, Func<HttpResponseMessage, Task<T>>? responseFunc = null)
     {
         int delayMs = 1_000;
         int attemptsRemaining = 4;

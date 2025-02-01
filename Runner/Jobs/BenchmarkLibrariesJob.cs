@@ -111,20 +111,16 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     private async Task<string[]> DownloadCoreRootsAsync(string range)
     {
-        string os = OperatingSystem.IsWindows() ? "windows" : "linux";
-        string archOsType = $"&arch={Arch}&os={os}&type=release";
+        CoreRootAPI.CoreRootEntry[] entries = await CoreRootAPI.ListAsync(this, range, "release");
 
-        CoreRootEntry[]? entries = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/List?range={range}{archOsType}", content: null,
-            async response => await response.Content.ReadFromJsonAsync<CoreRootEntry[]>());
-
-        if (entries is null)
+        if (entries.Length == 0)
         {
             throw new Exception("Failed to get the core run entries");
         }
 
         for (int i = 0; i < entries.Length; i++)
         {
-            CoreRootEntry entry = entries[i];
+            CoreRootAPI.CoreRootEntry entry = entries[i];
             entry.Directory = $"cr-{i.ToString().PadLeft(4, '0')}-{entry.Sha}";
         }
 
@@ -264,13 +260,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         string combinedMarkdown = string.Join("\n\n", results);
 
         await UploadTextArtifactAsync("results.md", combinedMarkdown);
-    }
-
-    public sealed class CoreRootEntry
-    {
-        public string? Sha { get; set; }
-        public string? Url { get; set; }
-        public string? Directory { get; set; }
     }
 
     [GeneratedRegex(@"^benchmark ([^ ]+)", RegexOptions.IgnoreCase | RegexOptions.Singleline)]

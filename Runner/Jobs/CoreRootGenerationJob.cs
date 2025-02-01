@@ -4,6 +4,9 @@ namespace Runner.Jobs;
 
 internal sealed class CoreRootGenerationJob : JobBase
 {
+    private readonly HashSet<(string? Sha, string? Type)> _toSkip = [];
+    private int _builtThisSession;
+
     public CoreRootGenerationJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
     protected override async Task RunJobCoreAsync()
@@ -12,8 +15,23 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         await CloneRuntimeAndSetupToolsAsync();
 
-        while (await BuildCoreRootsAsync())
+        string type = "release";
+
+        foreach (var entry in await CoreRootAPI.AllAsync(this, type))
         {
+            _toSkip.Add((entry.Sha, entry.Type));
+        }
+
+        while (true)
+        {
+            int built = _builtThisSession;
+            await BuildCoreRootsAsync(type);
+
+            if (built == _builtThisSession)
+            {
+                break;
+            }
+
             await WaitForPendingTasksAsync();
             await RunProcessAsync("git", "checkout main", workDir: "runtime");
             await RunProcessAsync("git", "pull origin", workDir: "runtime");
@@ -30,12 +48,8 @@ internal sealed class CoreRootGenerationJob : JobBase
         await cloneRuntimeTask;
     }
 
-    private async Task<bool> BuildCoreRootsAsync()
+    private async Task BuildCoreRootsAsync(string type)
     {
-        string type = "release";
-        string os = OperatingSystem.IsWindows() ? "windows" : "linux";
-        string archOsType = $"arch={Arch}&os={os}&type={type}";
-
         int lastNDays = int.Parse(GetArgument(nameof(lastNDays), "60"));
 
         List<string> commits = await GitHelper.ListCommitsAsync(this, lastNDays, "runtime");
@@ -43,24 +57,14 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         await LogAsync($"Found {commits.Count} commits in the last {lastNDays} days");
 
-        HashSet<string?> existingCoreRoots;
-        {
-            var existingEntries = await SendAsyncCore(HttpMethod.Get, $"CoreRoot/All?{archOsType}", content: null,
-                async response => await response.Content.ReadFromJsonAsync<BenchmarkLibrariesJob.CoreRootEntry[]>());
-            existingEntries ??= [];
-            existingCoreRoots = existingEntries.Select(e => e.Sha).ToHashSet();
-        }
-
         var container = new BlobContainerClient(new Uri(Metadata["CoreRootSasUri"]));
-
-        int builtThisSession = 0;
 
         for (int i = 0; i < commits.Count; i++)
         {
             if (MaxRemainingTime.TotalHours < 1)
             {
                 await LogAsync("Approaching job duration limit. Stopping ...");
-                return false;
+                break;
             }
 
             if (PendingTasks.Count > 5)
@@ -69,17 +73,17 @@ internal sealed class CoreRootGenerationJob : JobBase
                 await WaitForPendingTasksAsync(2);
             }
 
-            string commit = commits[i];
-
-            if (existingCoreRoots.Contains(commit))
-            {
-                await LogAsync($"[{commit}] Skipping build (CoreRoot already exists)");
-                continue;
-            }
-
-            string progressMessage = $"Processing commit {i + 1}/{commits.Count}. Built {builtThisSession} in this session.";
+            string progressMessage = $"Processing commit {i + 1}/{commits.Count}. Built {_builtThisSession} in this session.";
             LastProgressSummary = progressMessage;
             await LogAsync(progressMessage);
+
+            string commit = commits[i];
+
+            if (!_toSkip.Add((commit, type)))
+            {
+                await LogAsync($"[{commit}] Skipping build");
+                continue;
+            }
 
             Stopwatch stopwatch = Stopwatch.StartNew();
 
@@ -93,10 +97,9 @@ internal sealed class CoreRootGenerationJob : JobBase
                 continue;
             }
 
-            if (await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}&{archOsType}", content: null,
-                response => Task.FromResult(response.StatusCode == HttpStatusCode.OK)))
+            if (await CoreRootAPI.GetAsync(this, commit, type) is not null)
             {
-                await LogAsync($"[{commit}] Skipping build (CoreRoot already exists)");
+                await LogAsync($"[{commit}] Skipping build");
                 continue;
             }
 
@@ -122,24 +125,22 @@ internal sealed class CoreRootGenerationJob : JobBase
             }
 
             string artifactsDir = await CopyArtifactsAsync(logPrefix, commit, type);
-            builtThisSession++;
+            _builtThisSession++;
 
             PendingTasks.Enqueue(Task.Run(async () =>
             {
                 string archivePath = await CompressArtifactsAsync(logPrefix, type, artifactsDir);
 
                 await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
-                var blob = container.GetBlobClient($"{commit}_{Arch}_{os}_{type}.7z");
+                var blob = container.GetBlobClient($"{commit}_{Arch}_{Os}_{type}.7z");
                 await blob.UploadAsync(archivePath, overwrite: true, JobTimeout);
-                await SendAsyncCore<object>(HttpMethod.Get, $"CoreRoot/Save?jobId={JobId}&sha={commit}&{archOsType}&blobName={blob.Name}");
+                await CoreRootAPI.SaveAsync(this, commit, type, blob.Name);
 
                 File.Delete(archivePath);
 
                 await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
             }));
         }
-
-        return builtThisSession > 0;
 
         static bool CanSkipBuilding(List<string> changedFiles)
         {
