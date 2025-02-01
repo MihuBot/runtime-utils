@@ -680,7 +680,7 @@ internal sealed class RegexDiffJob : JobBase
             this,
             JitDiffUtils.ParseDiffAnalyzeEntries(diffAnalyzeSummary, regressions),
             $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
-            $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
+            $"{JitDiffJob.DiffsPrDirectory}/{JitDiffJob.DasmSubdirectory}",
             tryGetExtraInfo,
             replaceName,
             maxCount: 1_000);
