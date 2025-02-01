@@ -68,13 +68,20 @@ internal sealed class CoreRootGenerationJob : JobBase
                 await WaitForPendingTasksAsync(2);
             }
 
+            string commit = commits[i];
+
+            if (existingCoreRoots.Contains(commit))
+            {
+                await LogAsync($"[{commit}] Skipping build (CoreRoot already exists)");
+                continue;
+            }
+
             string progressMessage = $"Processing commit {i + 1}/{commits.Count}. Built {builtThisSession} in this session.";
             LastProgressSummary = progressMessage;
             await LogAsync(progressMessage);
 
             Stopwatch stopwatch = Stopwatch.StartNew();
 
-            string commit = commits[i];
             await RunProcessAsync("git", $"checkout {commit}", workDir: "runtime");
 
             List<string> changedFiles = await GitHelper.GetChangedFilesAsync(this, "HEAD~1", "runtime");
@@ -85,12 +92,8 @@ internal sealed class CoreRootGenerationJob : JobBase
                 continue;
             }
 
-            bool hasEntry = existingCoreRoots.Contains(commit);
-
-            hasEntry = hasEntry || await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}&{archOsType}", content: null,
-                response => Task.FromResult(response.StatusCode == HttpStatusCode.OK));
-
-            if (hasEntry)
+            if (await SendAsyncCore(HttpMethod.Get, $"CoreRoot/Get?sha={commit}&{archOsType}", content: null,
+                response => Task.FromResult(response.StatusCode == HttpStatusCode.OK)))
             {
                 await LogAsync($"[{commit}] Skipping build (CoreRoot already exists)");
                 continue;
