@@ -14,6 +14,7 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         while (await BuildCoreRootsAsync())
         {
+            await WaitForPendingTasksAsync();
             await RunProcessAsync("git", "checkout main", workDir: "runtime");
             await RunProcessAsync("git", "pull origin", workDir: "runtime");
         }
