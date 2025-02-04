@@ -14,7 +14,7 @@ internal static class CoreRootAPI
     {
         return await job.SendAsyncCore(
             HttpMethod.Get,
-            $"CoreRoot/List?range={range}arch={JobBase.Arch}&os={JobBase.Os}&type={type}",
+            $"CoreRoot/List?range={range}&arch={JobBase.Arch}&os={JobBase.Os}&type={type}",
             responseFunc: async response => await response.Content.ReadFromJsonAsync<CoreRootEntry[]>())
             ?? [];
     }
