@@ -30,7 +30,24 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
             await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
-            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false);
+            try
+            {
+                await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false);
+            }
+            catch
+            {
+                // Workaround for https://github.com/dotnet/runtime/issues/111731
+                await LogAsync($"PR build failed. Retrying ...");
+                await Task.Delay(1_000);
+
+                if (await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false) != 0)
+                {
+                    await Task.Delay(10_000);
+                    await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false);
+                }
+
+                await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
+            }
 
             await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
 

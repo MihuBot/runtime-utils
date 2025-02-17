@@ -89,7 +89,7 @@ internal sealed class JitDiffJob : JobBase
         await cloneRuntimeTask;
     }
 
-    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true)
+    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true)
     {
         (bool rebuildClr, bool rebuildLibs) = await ShouldRebuildAsync();
 
@@ -128,7 +128,7 @@ internal sealed class JitDiffJob : JobBase
 
         async Task<(bool Clr, bool Libs)> ShouldRebuildAsync()
         {
-            if (branch == "pr" && !job.TryGetFlag("forceRebuildAll"))
+            if (canSkipRebuild && branch == "pr" && !job.TryGetFlag("forceRebuildAll"))
             {
                 bool clr = false;
                 bool libs = false;
