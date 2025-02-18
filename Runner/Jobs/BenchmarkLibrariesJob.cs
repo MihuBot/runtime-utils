@@ -6,19 +6,31 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     protected override async Task RunJobCoreAsync()
     {
-        await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
+        CoreRootAPI.CoreRootEntry[]? entries = null;
+
+        if (BenchmarkWithCompareRangeRegex().Match(CustomArguments) is { Success: true } rangeMatch)
+        {
+            entries = await CoreRootAPI.ListAsync(this, rangeMatch.Groups[2].Value, "release");
+
+            if (entries.Length == 0)
+            {
+                throw new Exception("Failed to get the core run entries");
+            }
+        }
+
+        await ChangeWorkingDirectoryToRamOrFastestDiskAsync(allowRamDisk: entries is null || entries.Length * 2 <= GetTotalSystemMemoryGB());
 
         Task clonePerformanceTask = CloneDotnetPerformanceAndSetupToolsAsync();
 
         string[] coreRuns;
 
-        if (BenchmarkWithCompareRangeRegex().Match(CustomArguments) is { Success: true } rangeMatch)
+        if (entries is not null)
         {
             await clonePerformanceTask;
 
             PendingTasks.Enqueue(RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json"));
 
-            coreRuns = await DownloadCoreRootsAsync(rangeMatch.Groups[2].Value);
+            coreRuns = await DownloadCoreRootsAsync(entries);
         }
         else
         {
@@ -126,15 +138,8 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         }
     }
 
-    private async Task<string[]> DownloadCoreRootsAsync(string range)
+    private async Task<string[]> DownloadCoreRootsAsync(CoreRootAPI.CoreRootEntry[] entries)
     {
-        CoreRootAPI.CoreRootEntry[] entries = await CoreRootAPI.ListAsync(this, range, "release");
-
-        if (entries.Length == 0)
-        {
-            throw new Exception("Failed to get the core run entries");
-        }
-
         for (int i = 0; i < entries.Length; i++)
         {
             CoreRootAPI.CoreRootEntry entry = entries[i];

@@ -537,9 +537,9 @@ public abstract class JobBase
         return (int)(memory.TotalPhysical / 1024 / 1024 / 1024);
     }
 
-    protected async Task ChangeWorkingDirectoryToRamOrFastestDiskAsync()
+    protected async Task ChangeWorkingDirectoryToRamOrFastestDiskAsync(bool allowRamDisk = true)
     {
-        string? newLocation = await ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore();
+        string? newLocation = await ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore(allowRamDisk);
         if (newLocation is not null)
         {
             string cachePath = Path.Combine(newLocation, "NuGetPackagesCache");
@@ -548,7 +548,7 @@ public abstract class JobBase
         }
     }
 
-    private async Task<string?> ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore()
+    private async Task<string?> ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore(bool allowRamDisk)
     {
         Stopwatch s = Stopwatch.StartNew();
 
@@ -565,7 +565,7 @@ public abstract class JobBase
 
         int availableRamGB = GetTotalSystemMemoryGB();
 
-        if (OperatingSystem.IsLinux() && availableRamGB >= 30)
+        if (OperatingSystem.IsLinux() && availableRamGB >= 30 && allowRamDisk)
         {
             try
             {
