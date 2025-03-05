@@ -109,6 +109,16 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                     }
                 }
             }
+
+            {
+                const string Path = "performance/src/Directory.Build.props";
+                string source = File.ReadAllText(Path);
+                source = source.Replace(
+                    "<TreatWarningsAsErrors>True</TreatWarningsAsErrors>",
+                    "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>",
+                    StringComparison.OrdinalIgnoreCase);
+                File.WriteAllText(Path, source);
+            }
         });
 
         Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full", logPrefix: "Install tools");
