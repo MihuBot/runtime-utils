@@ -584,7 +584,7 @@ public abstract class JobBase
                 const string NewWorkDir = "/ramdisk";
                 const string LogPrefix = "Prepare RAM disk";
 
-                int ramDiskSize = Math.Min(128, availableRamGB / 4 * 3);
+                int ramDiskSize = Math.Min(128, 2 * availableRamGB);
                 await RunProcessAsync("mkdir", NewWorkDir, logPrefix: LogPrefix);
                 await RunProcessAsync("mount", $"-t tmpfs -o size={ramDiskSize}G tmpfs {NewWorkDir}", logPrefix: LogPrefix);
 
