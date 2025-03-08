@@ -261,40 +261,67 @@ internal sealed class JitDiffJob : JobBase
 
         async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder)
         {
-            foreach (string projectDir in Directory.GetDirectories(ExtraProjectsDirectory))
+            var projectDirs = new Queue<string>(Directory.GetDirectories(ExtraProjectsDirectory));
+            if (projectDirs.Count == 0)
             {
-                List<string> testedAssemblies = new();
+                return;
+            }
 
-                string diffAssembliesListPath = Path.Combine(projectDir, "DiffAssemblies.txt");
+            int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount / 2, GetRemainingSystemMemoryGB() / 3), projectDirs.Count / 20);
+            coreRootCopies = Math.Max(coreRootCopies, 1);
 
-                if (File.Exists(diffAssembliesListPath))
+            await Parallel.ForAsync(0, coreRootCopies, async (index, _) =>
+            {
+                string newCoreRootFolder = $"{coreRootFolder}_{index}";
+                string newCheckedClrFolder = $"{checkedClrFolder}_{index}";
+
+                CopyDirectory(coreRootFolder, newCoreRootFolder);
+                CopyDirectory(checkedClrFolder, newCheckedClrFolder);
+
+                while (true)
                 {
-                    foreach (string line in File.ReadAllLines(diffAssembliesListPath))
+                    string? projectDir;
+                    lock (projectDirs)
                     {
-                        if (line.StartsWith('#') || string.IsNullOrWhiteSpace(line) || !line.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                        if (!projectDirs.TryDequeue(out projectDir))
                         {
-                            continue;
+                            break;
                         }
+                    }
 
-                        testedAssemblies.Add(line);
+                    List<string> testedAssemblies = new();
+
+                    string diffAssembliesListPath = Path.Combine(projectDir, "DiffAssemblies.txt");
+
+                    if (File.Exists(diffAssembliesListPath))
+                    {
+                        foreach (string line in File.ReadAllLines(diffAssembliesListPath))
+                        {
+                            if (line.StartsWith('#') || string.IsNullOrWhiteSpace(line) || !line.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                            {
+                                continue;
+                            }
+
+                            testedAssemblies.Add(line);
+                        }
+                    }
+                    else
+                    {
+                        testedAssemblies.Add($"{Path.GetFileName(projectDir)}.dll");
+                    }
+
+                    string[] assemblyPaths = testedAssemblies.Select(a => Path.GetFullPath(Path.Combine(projectDir, a))).ToArray();
+
+                    try
+                    {
+                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, newCheckedClrFolder, outputFolder, assemblyPaths);
+                    }
+                    catch (Exception ex)
+                    {
+                        await LogAsync($"Failed to diff {Path.GetFileName(projectDir)}: {ex.Message}");
                     }
                 }
-                else
-                {
-                    testedAssemblies.Add($"{Path.GetFileName(projectDir)}.dll");
-                }
-
-                string[] assemblyPaths = testedAssemblies.Select(a => Path.GetFullPath(Path.Combine(projectDir, a))).ToArray();
-
-                try
-                {
-                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, assemblyPaths);
-                }
-                catch (Exception ex)
-                {
-                    await LogAsync($"Failed to diff {Path.GetFileName(projectDir)}: {ex.Message}");
-                }
-            }
+            });
         }
 
         void CombineAllDiffs(string directory, string destination)
@@ -305,6 +332,18 @@ internal sealed class JitDiffJob : JobBase
             {
                 File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
             });
+        }
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+
+        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string destFile = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+            File.Copy(file, destFile, true);
         }
     }
 

@@ -537,6 +537,18 @@ public abstract class JobBase
         return (int)(memory.TotalPhysical / 1024 / 1024 / 1024);
     }
 
+    protected int GetRemainingSystemMemoryGB()
+    {
+        var memory = _hardwareInfo?.MemoryStatus;
+
+        if (memory is null)
+        {
+            return 1;
+        }
+
+        return (int)(memory.AvailablePhysical / 1024 / 1024 / 1024);
+    }
+
     protected async Task ChangeWorkingDirectoryToRamOrFastestDiskAsync(bool allowRamDisk = true)
     {
         string? newLocation = await ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore(allowRamDisk);
