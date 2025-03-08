@@ -281,7 +281,7 @@ internal sealed class JitDiffJob : JobBase
                 }
                 else
                 {
-                    testedAssemblies.Add($"{Path.GetFileNameWithoutExtension(projectDir)}.dll");
+                    testedAssemblies.Add($"{Path.GetFileName(projectDir)}.dll");
                 }
 
                 string[] assemblyPaths = testedAssemblies.Select(a => Path.GetFullPath(Path.Combine(projectDir, a))).ToArray();
