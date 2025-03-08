@@ -286,7 +286,14 @@ internal sealed class JitDiffJob : JobBase
 
                 string[] assemblyPaths = testedAssemblies.Select(a => Path.GetFullPath(Path.Combine(projectDir, a))).ToArray();
 
-                await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, assemblyPaths);
+                try
+                {
+                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRootFolder, checkedClrFolder, outputFolder, assemblyPaths);
+                }
+                catch (Exception ex)
+                {
+                    await LogAsync($"Failed to diff {Path.GetFileName(projectDir)}: {ex.Message}");
+                }
             }
         }
 
