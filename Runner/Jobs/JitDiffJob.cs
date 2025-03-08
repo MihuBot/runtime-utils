@@ -176,7 +176,8 @@ internal sealed class JitDiffJob : JobBase
     {
         try
         {
-            if (!Metadata.TryGetValue("JitDiffExtraAssembliesSasUri", out string? uri))
+            if (!Metadata.TryGetValue("JitDiffExtraAssembliesSasUri", out string? uri) ||
+                !TryGetFlag("nuget"))
             {
                 return;
             }
