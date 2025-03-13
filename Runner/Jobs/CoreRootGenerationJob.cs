@@ -1,6 +1,4 @@
-﻿using Azure.Storage.Blobs;
-
-namespace Runner.Jobs;
+﻿namespace Runner.Jobs;
 
 internal sealed class CoreRootGenerationJob : JobBase
 {
@@ -56,8 +54,6 @@ internal sealed class CoreRootGenerationJob : JobBase
         commits.Reverse();
 
         await LogAsync($"Found {commits.Count} commits in the last {lastNDays} days");
-
-        var container = new BlobContainerClient(new Uri(Metadata["CoreRootSasUri"]));
 
         for (int i = 0; i < commits.Count; i++)
         {
@@ -132,9 +128,9 @@ internal sealed class CoreRootGenerationJob : JobBase
                 string archivePath = await CompressArtifactsAsync(logPrefix, type, artifactsDir);
 
                 await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
-                var blob = container.GetBlobClient($"{commit}_{Arch}_{Os}_{type}.7z");
-                await blob.UploadAsync(archivePath, overwrite: true, JobTimeout);
-                await CoreRootAPI.SaveAsync(this, commit, type, blob.Name);
+                string blobName = $"{commit}_{Arch}_{Os}_{type}.7z";
+                await UploadCoreRootAsync(blobName, archivePath);
+                await CoreRootAPI.SaveAsync(this, commit, type, blobName);
 
                 File.Delete(archivePath);
 
@@ -166,6 +162,19 @@ internal sealed class CoreRootGenerationJob : JobBase
 
             return true;
         }
+    }
+
+    private async Task UploadCoreRootAsync(string blobName, string filePath)
+    {
+        string containerSasUrl = Metadata["CoreRootSasUri"];
+        int queryOffset = containerSasUrl.IndexOf('?');
+        string url = $"{containerSasUrl.AsSpan(0, queryOffset)}/{blobName}{containerSasUrl.AsSpan(queryOffset)}";
+
+        await using var fs = File.OpenRead(filePath);
+        using var content = new StreamContent(fs);
+
+        using var response = await HttpClient.PostAsync(url, content, JobTimeout);
+        response.EnsureSuccessStatusCode();
     }
 
     private async Task<bool> TryBuildAsync(string logPrefix, string type)
