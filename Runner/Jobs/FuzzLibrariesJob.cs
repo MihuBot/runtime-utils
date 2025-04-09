@@ -124,7 +124,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
         try
         {
             var remoteInputsZipBlob = PersistentStateClient.GetBlobClient($"{inputsDirectory}.zip");
-            if (await remoteInputsZipBlob.ExistsAsync(JobTimeout))
+            if (!TryGetFlag("skipExistingInputs") && await remoteInputsZipBlob.ExistsAsync(JobTimeout))
             {
                 var content = (await remoteInputsZipBlob.DownloadContentAsync(JobTimeout)).Value;
                 ZipFile.ExtractToDirectory(content.Content.ToStream(), inputsDirectory);
