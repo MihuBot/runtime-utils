@@ -226,8 +226,14 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         string coreRuns = string.Join(' ', coreRunPaths.Select(Path.GetFullPath));
 
-        int coresToKeepIdle = Math.Max(1, Environment.ProcessorCount / 16);
-        string parallelSuffix = TryGetFlag("parallel") ? $"--parallel {Environment.ProcessorCount - coresToKeepIdle}" : "";
+        int coreCount = (int)(HardwareInfo?.CpuList.First().NumberOfCores ?? 0);
+        if (coreCount > Environment.ProcessorCount)
+        {
+            await LogAsync($"Warning: Core count {coreCount} is greater than the number of logical processors {Environment.ProcessorCount}??");
+            coreCount = Environment.ProcessorCount / 2;
+        }
+
+        string parallelSuffix = TryGetFlag("parallel") ? $"--parallel {coreCount}" : "";
 
         string? artifactsDir = null;
 

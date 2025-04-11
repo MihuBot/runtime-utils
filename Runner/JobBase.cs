@@ -19,9 +19,10 @@ public abstract class JobBase
     private readonly CancellationTokenSource _jobCts;
     private readonly Channel<string> _channel;
     private readonly Stopwatch _lastLogEntry = new();
-    private HardwareInfo? _hardwareInfo;
     private volatile bool _completed;
     private readonly List<(string, string)> _sharedEnvVars = [];
+
+    public HardwareInfo? HardwareInfo { get; private set; }
 
     private readonly DateTime _maxEndTime;
     protected readonly DateTime StartTime;
@@ -527,7 +528,7 @@ public abstract class JobBase
 
     protected int GetTotalSystemMemoryGB()
     {
-        var memory = _hardwareInfo?.MemoryStatus;
+        var memory = HardwareInfo?.MemoryStatus;
 
         if (memory is null)
         {
@@ -539,7 +540,7 @@ public abstract class JobBase
 
     protected int GetRemainingSystemMemoryGB()
     {
-        var memory = _hardwareInfo?.MemoryStatus;
+        var memory = HardwareInfo?.MemoryStatus;
 
         if (memory is null)
         {
@@ -566,7 +567,7 @@ public abstract class JobBase
 
         do
         {
-            if (_hardwareInfo is not null)
+            if (HardwareInfo is not null)
             {
                 break;
             }
@@ -676,10 +677,10 @@ public abstract class JobBase
         {
             try
             {
-                var info = _hardwareInfo ?? new HardwareInfo();
+                var info = HardwareInfo ?? new HardwareInfo();
                 info.RefreshMemoryStatus();
                 info.RefreshCPUList(includePercentProcessorTime: true);
-                _hardwareInfo = info;
+                HardwareInfo = info;
             }
             catch (Exception ex)
             {
@@ -696,11 +697,11 @@ public abstract class JobBase
             var elapsed = stopwatch.Elapsed;
             stopwatch.Restart();
 
-            var cores = _hardwareInfo.CpuList.First().CpuCoreList;
+            var cores = HardwareInfo.CpuList.First().CpuCoreList;
             var totalCpuUsage = cores.Sum(c => (double)c.PercentProcessorTime) / 100;
             var coreCount = cores.Count;
 
-            var memory = _hardwareInfo.MemoryStatus;
+            var memory = HardwareInfo.MemoryStatus;
             var availableGB = (double)memory.AvailablePhysical / 1024 / 1024 / 1024;
             var totalGB = (double)memory.TotalPhysical / 1024 / 1024 / 1024;
             var usedGB = totalGB - availableGB;
