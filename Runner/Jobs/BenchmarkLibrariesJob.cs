@@ -1,4 +1,6 @@
-﻿namespace Runner.Jobs;
+﻿using System.IO.Compression;
+
+namespace Runner.Jobs;
 
 internal sealed partial class BenchmarkLibrariesJob : JobBase
 {
@@ -119,6 +121,42 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                     StringComparison.OrdinalIgnoreCase);
                 File.WriteAllText(Path, source);
             }
+
+            if (TryGetFlag("parallel"))
+            {
+                {
+                    var customNugetFeedDirectory = new DirectoryInfo("CustomNugetFeed");
+                    customNugetFeedDirectory.Create();
+
+                    const string ZipPath = "BenchmarkDotNet-custom.zip";
+                    await PersistentStateClient.GetBlobClient(ZipPath).DownloadToAsync(ZipPath, JobTimeout);
+                    ZipFile.ExtractToDirectory(ZipPath, customNugetFeedDirectory.FullName);
+
+                    string version = customNugetFeedDirectory.GetFiles()
+                        .Select(f => BenchmarkDotNetPackageVersionRegex().Match(f.Name))
+                        .First(m => m.Success)
+                        .Groups[1].Value;
+
+                    {
+                        const string NuGetConfigPath = "performance/NuGet.config";
+                        string source = File.ReadAllText(NuGetConfigPath);
+                        source = source.Replace(
+                            "<clear />",
+                            $"<clear />\r\n    <add key=\"local\" value=\"{customNugetFeedDirectory.FullName}\" />",
+                            StringComparison.OrdinalIgnoreCase);
+                        File.WriteAllText(NuGetConfigPath, source);
+                    }
+
+                    {
+                        const string VersionsPath = "performance/eng/Versions.props";
+                        string source = File.ReadAllText(VersionsPath);
+                        source = BenchmarkDotNetReferenceVersionRegex().Replace(source, $"<BenchmarkDotNetVersion>{version}</BenchmarkDotNetVersion>");
+                        File.WriteAllText(VersionsPath, source);
+                    }
+
+                    await LogAsync($"Configured custom BenchmarkDotNet version: {version}");
+                }
+            }
         });
 
         Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full", logPrefix: "Install tools");
@@ -187,11 +225,12 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         int dotnetVersion = RuntimeHelpers.GetDotnetVersion("performance");
 
         string coreRuns = string.Join(' ', coreRunPaths.Select(Path.GetFullPath));
+        string parallelSuffix = TryGetFlag("parallel") ? $"--parallel {Environment.ProcessorCount / 2}" : "";
 
         string? artifactsDir = null;
 
         await RunProcessAsync("/usr/lib/dotnet/dotnet",
-            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns}",
+            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
             processLogs: line =>
             {
@@ -324,4 +363,10 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     [GeneratedRegex("/cr-[0-9]+-([a-f0-9]{40})/corerun")]
     private static partial Regex CommitCoreRunReplacementRegex();
+
+    [GeneratedRegex(@"<BenchmarkDotNetVersion>.*?<\/BenchmarkDotNetVersion>")]
+    private static partial Regex BenchmarkDotNetReferenceVersionRegex();
+
+    [GeneratedRegex(@"BenchmarkDotNet\.(\d.*?)\.nupkg")]
+    private static partial Regex BenchmarkDotNetPackageVersionRegex();
 }
