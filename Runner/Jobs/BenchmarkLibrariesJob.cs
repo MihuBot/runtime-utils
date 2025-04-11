@@ -225,7 +225,9 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         int dotnetVersion = RuntimeHelpers.GetDotnetVersion("performance");
 
         string coreRuns = string.Join(' ', coreRunPaths.Select(Path.GetFullPath));
-        string parallelSuffix = TryGetFlag("parallel") ? $"--parallel {Environment.ProcessorCount / 2}" : "";
+
+        int coresToKeepIdle = Math.Max(1, Environment.ProcessorCount / 16);
+        string parallelSuffix = TryGetFlag("parallel") ? $"--parallel {Environment.ProcessorCount - coresToKeepIdle}" : "";
 
         string? artifactsDir = null;
 
