@@ -48,7 +48,7 @@ internal sealed class CoreRootGenerationJob : JobBase
 
     private async Task BuildCoreRootsAsync(string type)
     {
-        int lastNDays = int.Parse(GetArgument(nameof(lastNDays), "60"));
+        int lastNDays = int.Parse(GetArgument(nameof(lastNDays), "2"));
 
         List<string> commits = await GitHelper.ListCommitsAsync(this, lastNDays, "runtime");
         commits.Reverse();
