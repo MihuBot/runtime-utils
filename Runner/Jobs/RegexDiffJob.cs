@@ -22,19 +22,21 @@ internal sealed class RegexDiffJob : JobBase
 
     protected override async Task RunJobCoreAsync()
     {
+        bool skipJitDiff = TryGetFlag("SkipJitDiff");
+
         await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
 
         KnownPattern[] knownPatterns = await DownloadKnownPatternsAsync();
 
         await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
+        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: !skipJitDiff);
 
         var mainSources = await RunSourceGeneratorOnKnownPatternsAsync("main");
 
         await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false);
+        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: !skipJitDiff);
 
         var prSources = await RunSourceGeneratorOnKnownPatternsAsync("pr");
 
@@ -46,9 +48,12 @@ internal sealed class RegexDiffJob : JobBase
 
         await UploadSourceGeneratorResultsAsync(entries);
 
-        await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+        if (!skipJitDiff)
+        {
+            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
 
-        await RunJitDiffAsync(knownPatterns, entries);
+            await RunJitDiffAsync(knownPatterns, entries);
+        }
     }
 
     private async Task<KnownPattern[]> DownloadKnownPatternsAsync()
