@@ -38,23 +38,33 @@ internal sealed partial class FuzzLibrariesJob : JobBase
 
     private async Task BuildRuntimeAndPrepareFuzzerAsync()
     {
-        const string ScriptName = "build-runtime.bat";
+        const string BuildRuntimeBat = "build-runtime.bat";
+        const string PrepareFuzzerBat = "prepare-fuzzer.bat";
 
-        File.WriteAllText(ScriptName,
+        File.WriteAllText(BuildRuntimeBat,
             $$"""
             cd runtime
             git switch pr
 
             call .\build.cmd clr+libs -rc Checked -c Debug {{RuntimeHelpers.LibrariesExtraBuildArgs}}
+            """);
 
-            cd src\libraries\Fuzzing\DotnetFuzzing
+        File.WriteAllText(PrepareFuzzerBat,
+            $$"""
+            cd runtime\src\libraries\Fuzzing\DotnetFuzzing
             ..\..\..\..\.dotnet\dotnet build-server shutdown
             ..\..\..\..\.dotnet\dotnet build
             ..\..\..\..\.dotnet\dotnet tool install --tool-path . SharpFuzz.CommandLine
             call run.bat
             """);
 
-        await RunProcessAsync(ScriptName, string.Empty);
+        const string RunBatchPath = "runtime/src/libraries/Fuzzing/DotnetFuzzing/run.bat";
+        string runScript = File.ReadAllText(RunBatchPath);
+        runScript = runScript.Replace("win-x64", "win-arm64", StringComparison.Ordinal);
+        File.WriteAllText(RunBatchPath, runScript);
+
+        await RunProcessAsync(BuildRuntimeBat, string.Empty);
+        await RunProcessAsync(PrepareFuzzerBat, string.Empty);
     }
 
     private async Task RunFuzzersAsync(string fuzzerNamePattern)
