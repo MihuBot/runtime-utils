@@ -58,13 +58,21 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             call run.bat
             """);
 
-        const string RunBatchPath = "runtime/src/libraries/Fuzzing/DotnetFuzzing/run.bat";
-        string runScript = File.ReadAllText(RunBatchPath);
-        runScript = runScript.Replace("win-x64", "win-arm64", StringComparison.Ordinal);
-        File.WriteAllText(RunBatchPath, runScript);
+        Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/run.bat",
+            content => content.Replace("win-x64", "win-arm64", StringComparison.Ordinal));
+
+        Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/DotnetFuzzing.csproj",
+            content => content.Replace("win-x64", "win-arm64", StringComparison.Ordinal));
 
         await RunProcessAsync(BuildRuntimeBat, string.Empty);
         await RunProcessAsync(PrepareFuzzerBat, string.Empty);
+
+        static void Patch(string path, Func<string, string> patch)
+        {
+            string content = File.ReadAllText(path);
+            content = patch(content);
+            File.WriteAllText(path, content);
+        }
     }
 
     private async Task RunFuzzersAsync(string fuzzerNamePattern)
