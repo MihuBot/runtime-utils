@@ -6,8 +6,27 @@ on:
 
 jobs:
   run-windows:
-    if: (github.actor == 'MihuBot' || github.actor == 'MihaZupan') && contains(github.event.issue.body, 'RUN_AS_GITHUB_ACTION_')
+    if: (github.actor == 'MihuBot' || github.actor == 'MihaZupan') && contains(github.event.issue.body, 'RUN_AS_GITHUB_ACTION_') && !contains(github.event.issue.title, 'ARM64')
     runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8.0
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0'
+
+      - name: Run script
+        shell: pwsh
+        env:
+          RUNTIME_UTILS_TOKEN: ${{ secrets.RUNTIME_UTILS_TOKEN }}
+        run: |
+          cd Runner
+          dotnet run -c Release "${{ github.event_path }}"
+
+  run-windows-arm:
+    if: (github.actor == 'MihuBot' || github.actor == 'MihaZupan') && contains(github.event.issue.body, 'RUN_AS_GITHUB_ACTION_') && contains(github.event.issue.title, 'ARM64')
+    runs-on: windows-11-arm
     steps:
       - uses: actions/checkout@v4
 
