@@ -58,11 +58,14 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             call run.bat
             """);
 
-        Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/run.bat",
-            content => content.Replace("win-x64", "win-arm64", StringComparison.Ordinal));
+        if (IsArm)
+        {
+            Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/run.bat",
+                content => content.Replace("win-x64", "win-arm64", StringComparison.Ordinal));
 
-        Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/DotnetFuzzing.csproj",
-            content => content.Replace("win-x64", "win-arm64", StringComparison.Ordinal));
+            Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/DotnetFuzzing.csproj",
+                content => content.Replace("win-x64", "win-arm64", StringComparison.Ordinal));
+        }
 
         await RunProcessAsync(BuildRuntimeBat, string.Empty);
         await RunProcessAsync(PrepareFuzzerBat, string.Empty);
