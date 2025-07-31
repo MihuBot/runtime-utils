@@ -216,6 +216,7 @@ internal sealed class CoreRootGenerationJob : JobBase
             if (file.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase) ||
                 file.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) ||
                 file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+                file.EndsWith(".mibc", StringComparison.OrdinalIgnoreCase) ||
                 file.Contains("SuperFileCheck/", StringComparison.OrdinalIgnoreCase) ||
                 file.Contains("R2RTest/", StringComparison.OrdinalIgnoreCase) ||
                 file.Contains("PDB/", StringComparison.OrdinalIgnoreCase) ||
