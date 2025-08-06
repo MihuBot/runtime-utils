@@ -91,6 +91,8 @@ internal sealed class JitDiffJob : JobBase
 
     public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true)
     {
+        canSkipRebuild &= branch == "pr" && !ForceRebuildAll();
+
         (bool rebuildClr, bool rebuildLibs) = await ShouldRebuildAsync();
 
         string targets = (rebuildClr, rebuildLibs) switch
@@ -99,6 +101,11 @@ internal sealed class JitDiffJob : JobBase
             (true, false) => "clr",
             _ => "libs"
         };
+
+        if (branch == "pr" && ForceRebuildAll())
+        {
+            await job.RunProcessAsync("bash", "build.sh -clean", logPrefix: $"{branch} clean", workDir: "runtime");
+        }
 
         await job.RunProcessAsync("bash", $"build.sh {targets} -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
 
@@ -126,9 +133,11 @@ internal sealed class JitDiffJob : JobBase
 
         await copyReleaseBitsTask;
 
+        bool ForceRebuildAll() => job.TryGetFlag("forceRebuildAll");
+
         async Task<(bool Clr, bool Libs)> ShouldRebuildAsync()
         {
-            if (canSkipRebuild && branch == "pr" && !job.TryGetFlag("forceRebuildAll"))
+            if (canSkipRebuild)
             {
                 bool clr = false;
                 bool libs = false;
