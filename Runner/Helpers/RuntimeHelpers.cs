@@ -62,9 +62,11 @@ internal static class RuntimeHelpers
     {
         const string LogPrefix = "Setup runtime";
 
+        bool runtimeAlreadyExists = Directory.Exists("runtime");
+
         if (OperatingSystem.IsLinux())
         {
-            string initialClone = Directory.Exists("runtime") ?
+            string initialClone = runtimeAlreadyExists ?
                 $$$"""
                 cd runtime
                 git switch {{{job.BaseBranch}}}
@@ -75,10 +77,11 @@ internal static class RuntimeHelpers
                 cd runtime
                 """;
 
-            string createPrBranch = Directory.Exists("runtime") ?
+            string createPrBranch = runtimeAlreadyExists ?
                 """
                 git branch -D pr
                 git switch -c pr
+                git remote remove combineWith1
                 """ :
                 """
                 git switch -c pr
@@ -112,7 +115,7 @@ internal static class RuntimeHelpers
         }
         else
         {
-            if (Directory.Exists("runtime"))
+            if (runtimeAlreadyExists)
             {
                 throw new UnreachableException();
             }
