@@ -1,10 +1,10 @@
-﻿using Hardware.Info;
+﻿using Azure.Storage.Blobs;
+using Hardware.Info;
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
+using System.IO.Compression;
 using System.Runtime.InteropServices;
 using System.Threading.Channels;
-using System.IO.Compression;
-using Azure.Storage.Blobs;
-using System.Collections.Concurrent;
 
 namespace Runner;
 
@@ -14,9 +14,14 @@ public abstract class JobBase
     public static string Arch = IsArm ? "arm64" : "x64";
     public static string Os => OperatingSystem.IsWindows() ? "windows" : "linux";
 
-    public readonly string JobId;
+    public string JobId { get; private set; }
 
-    private readonly CancellationTokenSource _jobCts;
+    private readonly string? _preparedRunnerId;
+    private readonly string? _preparedRunnerToken;
+    public bool Live { get; private set; }
+    public bool UsingPreparedRunner => _preparedRunnerId is not null;
+
+    private readonly CancellationTokenSource _jobCts = new();
     private readonly Channel<string> _channel;
     private readonly Stopwatch _lastLogEntry = new();
     private volatile bool _completed;
@@ -24,13 +29,13 @@ public abstract class JobBase
 
     public HardwareInfo? HardwareInfo { get; private set; }
 
-    private readonly DateTime _maxEndTime;
-    protected readonly DateTime StartTime;
+    private DateTime _maxEndTime;
+    protected DateTime StartTime { get; private set; }
     protected CancellationToken JobTimeout => _jobCts.Token;
     protected TimeSpan MaxRemainingTime => _maxEndTime - DateTime.UtcNow;
 
     protected readonly HttpClient HttpClient;
-    public Dictionary<string, string> Metadata { get; }
+    public Dictionary<string, string> Metadata { get; private set; }
     public readonly string OriginalWorkingDirectory = Environment.CurrentDirectory;
 
     public TimeSpan ElapsedTime => DateTime.UtcNow - StartTime;
@@ -78,28 +83,54 @@ public abstract class JobBase
 
     protected BlobContainerClient PersistentStateClient => new(new Uri(Metadata["PersistentStateSasUri"]));
 
-    public JobBase(HttpClient client, Dictionary<string, string> metadata)
+    public JobBase(HttpClient client)
     {
         HttpClient = client;
-        Metadata = metadata;
-        JobId = metadata["JobId"];
-        StartTime = new DateTime(long.Parse(Metadata["JobStartTime"]), DateTimeKind.Utc);
-        _maxEndTime = new DateTime(long.Parse(Metadata["JobMaxEndTime"]), DateTimeKind.Utc);
+        Metadata = [];
+        JobId = "<unassigned>";
 
-        _jobCts = new CancellationTokenSource(MaxRemainingTime - TimeSpan.FromMinutes(3));
+        StartTime = DateTime.UtcNow;
 
         _channel = Channel.CreateBounded<string>(new BoundedChannelOptions(100_000)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
             SingleReader = true,
         });
+    }
+
+    public JobBase(HttpClient client, string runnerId, string runnerToken) : this(client)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(runnerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runnerToken);
+
+        _preparedRunnerId = runnerId;
+        _preparedRunnerToken = runnerToken;
+    }
+
+    public JobBase(HttpClient client, Dictionary<string, string> metadata) : this(client)
+    {
+        InitFromMetadata(metadata);
+    }
+
+    protected void InitFromMetadata(Dictionary<string, string> metadata)
+    {
+        Metadata = metadata;
+        JobId = metadata["JobId"];
+        StartTime = new DateTime(long.Parse(Metadata["JobStartTime"]), DateTimeKind.Utc);
+        _maxEndTime = new DateTime(long.Parse(Metadata["JobMaxEndTime"]), DateTimeKind.Utc);
+
+        _jobCts.CancelAfter(MaxRemainingTime - TimeSpan.FromMinutes(3));
 
         if (StartTime >= DateTime.UtcNow)
         {
             _channel.Writer.TryWrite($"Start time ({StartTime.Ticks}) is after current time ({DateTime.UtcNow.Ticks})?");
             StartTime = DateTime.UtcNow;
         }
+
+        Live = true;
     }
+
+    public virtual Task RunPreparedRunnerAsync() => throw new NotImplementedException();
 
     protected abstract Task RunJobCoreAsync();
 
@@ -166,7 +197,7 @@ public abstract class JobBase
         }
         catch { }
 
-        await HttpClient.GetStringAsync($"Jobs/Complete/{JobId}", CancellationToken.None);
+        await HttpClient.GetStringAsync($"Jobs/Complete?jobId={JobId}", CancellationToken.None);
     }
 
     protected async Task WaitForPendingTasksAsync(int count = int.MaxValue)
@@ -179,6 +210,11 @@ public abstract class JobBase
 
     public async Task ZipAndUploadArtifactAsync(string zipFileName, string folderPath)
     {
+        if (!Live)
+        {
+            return;
+        }
+
         zipFileName = $"{zipFileName}.zip";
         string zipFilePath = Path.GetFullPath(zipFileName);
 
@@ -211,6 +247,14 @@ public abstract class JobBase
 
     public async Task LogAsync(string message)
     {
+        message = $"[{FormatElapsedTime(ElapsedTime)}] {message}";
+
+        if (!Live)
+        {
+            Console.WriteLine(message);
+            return;
+        }
+
         lock (_lastLogEntry)
         {
             _lastLogEntry.Restart();
@@ -218,7 +262,7 @@ public abstract class JobBase
 
         try
         {
-            await _channel.Writer.WriteAsync($"[{FormatElapsedTime(ElapsedTime)}] {message}", JobTimeout);
+            await _channel.Writer.WriteAsync(message, JobTimeout);
         }
         catch { }
     }
@@ -472,7 +516,7 @@ public abstract class JobBase
         using StreamContent content = new(fs);
 
         using var response = await HttpClient.PostAsync(
-            $"Jobs/Artifact/{JobId}/{Uri.EscapeDataString(name)}",
+            $"Jobs/Artifact?jobId={JobId}&fileName={Uri.EscapeDataString(name)}",
             content,
             JobTimeout);
     }
@@ -523,7 +567,12 @@ public abstract class JobBase
 
     private async Task PostJobsJsonAsync(string path, object? value, string? queryArgs = null)
     {
-        await SendAsyncCore<object>(HttpMethod.Post, $"Jobs/{path}/{JobId}{queryArgs}", JsonContent.Create(value));
+        if (!string.IsNullOrEmpty(queryArgs))
+        {
+            queryArgs = $"&{queryArgs}";
+        }
+
+        await SendAsyncCore<object>(HttpMethod.Post, $"Jobs/{path}?jobId={JobId}{queryArgs}", JsonContent.Create(value));
     }
 
     protected int GetTotalSystemMemoryGB()
@@ -719,7 +768,7 @@ public abstract class JobBase
                 CpuCoresAvailable = coreCount,
                 MemoryUsageGB = usedGB,
                 MemoryAvailableGB = totalGB,
-            }, LastProgressSummary is { } summary ? $"?progressSummary={Uri.EscapeDataString(summary)}" : null);
+            }, LastProgressSummary is { } summary ? $"progressSummary={Uri.EscapeDataString(summary)}" : null);
         }
 
         if (failureMessages == 0 && usageHistory.Count > 0)
@@ -733,5 +782,53 @@ public abstract class JobBase
             await LogAsync($"Average overall CPU usage estimate: {(int)averageCpuUsage} %");
             await LogAsync($"Average overall memory usage estimate: {(int)averageMemoryUsage} %");
         }
+    }
+
+    protected async Task<bool> TryAnnounceAndSwitchToLiveJobAsync()
+    {
+        ArgumentNullException.ThrowIfNull(_preparedRunnerId);
+
+        var request = new HttpRequestMessage(HttpMethod.Get, $"Jobs/AnnounceRunner?jobType={GetType().Name}&runnerId={Uri.EscapeDataString(_preparedRunnerId)}");
+        request.Headers.Add("X-Runner-Announce-Token", _preparedRunnerToken);
+
+        try
+        {
+            using HttpResponseMessage response = await HttpClient.SendAsync(request, JobTimeout);
+            response.EnsureSuccessStatusCode();
+
+            string? jobId = await response.Content.ReadFromJsonAsync<string>(JobTimeout);
+
+            if (string.IsNullOrEmpty(jobId))
+            {
+                return false;
+            }
+
+            Metadata = await GetMetadataAsync(HttpClient, jobId);
+        }
+        catch
+        {
+            return false;
+        }
+
+        InitFromMetadata(Metadata);
+        await RunJobAsync();
+        return true;
+    }
+
+    public static async Task<Dictionary<string, string>> GetMetadataAsync(HttpClient client, string jobId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"Jobs/Metadata?jobId={jobId}");
+
+        if (Environment.GetEnvironmentVariable("RUNTIME_UTILS_TOKEN") is { Length: > 0 } authToken)
+        {
+            request.Headers.Add("X-Runtime-Utils-Token", authToken);
+        }
+
+        using var response = await client.SendAsync(request);
+
+        var metadata = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>() ?? throw new Exception("Null response");
+        metadata = new Dictionary<string, string>(metadata, StringComparer.OrdinalIgnoreCase);
+
+        return metadata;
     }
 }

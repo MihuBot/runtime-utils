@@ -1,4 +1,6 @@
-﻿try
+﻿using Microsoft.CodeAnalysis;
+
+try
 {
     await RunAsync(args);
 }
@@ -12,8 +14,11 @@ static async Task RunAsync(string[] args)
 {
     Console.WriteLine("Starting ...");
     string? jobId = Environment.GetEnvironmentVariable("JOB_ID");
+    string? jobType = Environment.GetEnvironmentVariable("JOB_TYPE");
+    string? runnerId = Environment.GetEnvironmentVariable("RUNNER_ID");
+    string? runnerToken = Environment.GetEnvironmentVariable("RUNNER_TOKEN");
 
-    if (string.IsNullOrEmpty(jobId))
+    if (string.IsNullOrEmpty(jobId) && string.IsNullOrEmpty(runnerId))
     {
         if (args.Length == 1 &&
             args[0] is string eventPath &&
@@ -52,33 +57,41 @@ static async Task RunAsync(string[] args)
         Timeout = TimeSpan.FromMinutes(1),
     };
 
-    var request = new HttpRequestMessage(HttpMethod.Get, $"Jobs/Metadata/{jobId}");
-
-    if (Environment.GetEnvironmentVariable("RUNTIME_UTILS_TOKEN") is { Length: > 0 } authToken)
+    if (!string.IsNullOrEmpty(jobId))
     {
-        request.Headers.Add("X-Runtime-Utils-Token", authToken);
+        var metadata = await JobBase.GetMetadataAsync(client, jobId);
+        jobType = metadata["JobType"];
+
+        Console.WriteLine($"Obtained the job metadata. Job type: {jobType}");
+
+        JobBase job = jobType switch
+        {
+            nameof(JitDiffJob) => new JitDiffJob(client, metadata),
+            nameof(FuzzLibrariesJob) => new FuzzLibrariesJob(client, metadata),
+            nameof(RebaseJob) => new RebaseJob(client, metadata),
+            nameof(BenchmarkLibrariesJob) => new BenchmarkLibrariesJob(client, metadata),
+            nameof(RegexDiffJob) => new RegexDiffJob(client, metadata),
+            nameof(BackportJob) => new BackportJob(client, metadata),
+            nameof(CoreRootGenerationJob) => new CoreRootGenerationJob(client, metadata),
+            var type => throw new NotSupportedException(type),
+        };
+
+        await job.RunJobAsync();
     }
-
-    using var response = await client.SendAsync(request);
-
-    var metadata = await response.Content.ReadFromJsonAsync<Dictionary<string, string>>() ?? throw new Exception("Null response");
-    metadata = new Dictionary<string, string>(metadata, StringComparer.OrdinalIgnoreCase);
-
-    string jobType = metadata["JobType"];
-
-    Console.WriteLine($"Obtained the job metadata. Job type: {jobType}");
-
-    JobBase job = jobType switch
+    else
     {
-        nameof(JitDiffJob) => new JitDiffJob(client, metadata),
-        nameof(FuzzLibrariesJob) => new FuzzLibrariesJob(client, metadata),
-        nameof(RebaseJob) => new RebaseJob(client, metadata),
-        nameof(BenchmarkLibrariesJob) => new BenchmarkLibrariesJob(client, metadata),
-        nameof(RegexDiffJob) => new RegexDiffJob(client, metadata),
-        nameof(BackportJob) => new BackportJob(client, metadata),
-        nameof(CoreRootGenerationJob) => new CoreRootGenerationJob(client, metadata),
-        var type => throw new NotSupportedException(type),
-    };
+        ArgumentException.ThrowIfNullOrWhiteSpace(jobType);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runnerId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(runnerToken);
 
-    await job.RunJobAsync();
+        Console.WriteLine($"Starting prepared runner. Job type: {jobType}");
+
+        JobBase job = jobType switch
+        {
+            nameof(JitDiffJob) => new JitDiffJob(client, runnerId, runnerToken),
+            var type => throw new NotSupportedException(type),
+        };
+
+        await job.RunPreparedRunnerAsync();
+    }
 }

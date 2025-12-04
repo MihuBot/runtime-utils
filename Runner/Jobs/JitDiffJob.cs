@@ -15,11 +15,39 @@ internal sealed class JitDiffJob : JobBase
     private const string CombinedDasmMainDirectory = "diffs-main-combined";
     private const string CombinedDasmPrDirectory = "diffs-pr-combined";
 
+    public JitDiffJob(HttpClient client, string runnerId, string runnerToken) : base(client, runnerId, runnerToken) { }
     public JitDiffJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
+
+    public override async Task RunPreparedRunnerAsync()
+    {
+        Metadata[nameof(BaseRepo)] = Metadata[nameof(PrRepo)] = "dotnet/runtime";
+        Metadata[nameof(BaseBranch)] = Metadata[nameof(PrBranch)] = "main";
+
+        while (true)
+        {
+            await CloneRuntimeAndSetupToolsAsync(this);
+
+            await RunProcessAsync("bash", $"build.sh clr+libs -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", workDir: "runtime");
+            await RunProcessAsync("bash", "build.sh clr.jit -c Checked", workDir: "runtime");
+
+            Stopwatch timeSinceLastBuild = Stopwatch.StartNew();
+
+            while (timeSinceLastBuild.Elapsed.TotalMinutes < 30)
+            {
+                if (await TryAnnounceAndSwitchToLiveJobAsync())
+                {
+                    return;
+                }
+            }
+        }
+    }
 
     protected override async Task RunJobCoreAsync()
     {
-        await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
+        if (!UsingPreparedRunner)
+        {
+            await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
+        }
 
         await CloneRuntimeAndSetupToolsAsync(this);
 
@@ -52,10 +80,15 @@ internal sealed class JitDiffJob : JobBase
             const string LogPrefix = "Setup jitutils";
             await setupZipAndWgetTask;
 
+            if (Directory.Exists("jitutils"))
+            {
+                return;
+            }
+
             string repo = job.GetArgument("jitutils-repo", "dotnet/jitutils");
             string branch = job.GetArgument("jitutils-branch", "main");
 
-            await job.RunProcessAsync("git", $"clone --no-tags --single-branch -b {branch} --progress https://github.com/{repo}.git", logPrefix: LogPrefix);
+            await job.RunProcessAsync("git", $"clone --no-tags --single-branch -b {branch} --progress https://github.com/{repo}.git jitutils", logPrefix: LogPrefix);
 
             if (IsArm)
             {

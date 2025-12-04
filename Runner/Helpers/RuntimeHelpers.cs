@@ -64,12 +64,22 @@ internal static class RuntimeHelpers
 
         if (OperatingSystem.IsLinux())
         {
+            string initialClone = Directory.Exists("runtime") ?
+                $$$"""
+                cd runtime
+                git switch {{{job.BaseBranch}}}
+                git pull origin
+                """ :
+                $$$"""
+                git clone --no-tags --branch {{{job.BaseBranch}}} --single-branch --progress https://github.com/{{{job.BaseRepo}}} runtime
+                cd runtime
+                """;
+
             string script = UpdateMergePlaceholders(
                 $$$"""
                 set -e
 
-                git clone --no-tags --branch {{{job.BaseBranch}}} --single-branch --progress https://github.com/{{{job.BaseRepo}}} runtime
-                cd runtime
+                {{{initialClone}}}
 
                 git log -1
                 chmod 777 build.sh
@@ -93,6 +103,11 @@ internal static class RuntimeHelpers
         }
         else
         {
+            if (Directory.Exists("runtime"))
+            {
+                throw new UnreachableException();
+            }
+
             string script = UpdateMergePlaceholders(
                 $$$"""
                 git config --system core.longpaths true
