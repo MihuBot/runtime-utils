@@ -791,6 +791,8 @@ public abstract class JobBase
     {
         ArgumentNullException.ThrowIfNull(_preparedRunnerId);
 
+        await LogAsync($"Announcing prepared runner '{_preparedRunnerId}' ...");
+
         var request = new HttpRequestMessage(HttpMethod.Get, $"Jobs/AnnounceRunner?jobType={GetType().Name}&runnerId={Uri.EscapeDataString(_preparedRunnerId)}");
         request.Headers.Add("X-Runner-Announce-Token", _preparedRunnerToken);
 
