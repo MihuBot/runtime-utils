@@ -44,7 +44,7 @@ public abstract class JobBase
 
     public readonly ConcurrentQueue<Task> PendingTasks = new();
 
-    public string CustomArguments => Metadata[nameof(CustomArguments)];
+    public string CustomArguments => Metadata.TryGetValue(nameof(CustomArguments), out string? args) ? args : string.Empty;
     public string BaseRepo => Metadata[nameof(BaseRepo)];
     public string BaseBranch => Metadata[nameof(BaseBranch)];
     public string PrRepo => Metadata[nameof(PrRepo)];
@@ -251,7 +251,10 @@ public abstract class JobBase
 
         if (!Live)
         {
-            Console.WriteLine(message);
+            lock (Console.Out)
+            {
+                Console.WriteLine(message);
+            }
             return;
         }
 
