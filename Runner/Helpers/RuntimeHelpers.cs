@@ -75,6 +75,15 @@ internal static class RuntimeHelpers
                 cd runtime
                 """;
 
+            string createPrBranch = Directory.Exists("runtime") ?
+                """
+                git branch -D pr
+                git switch -c pr
+                """ :
+                """
+                git switch -c pr
+                """;
+
             string script = UpdateMergePlaceholders(
                 $$$"""
                 set -e
@@ -88,7 +97,7 @@ internal static class RuntimeHelpers
 
                 {{MERGE_BASELINE_BRANCHES}}
 
-                git switch -c pr
+                {{{createPrBranch}}}
 
                 {{MERGE_PR_BRANCHES}}
 
