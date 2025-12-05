@@ -148,8 +148,8 @@ internal static class RuntimeHelpers
             await job.RunProcessAsync("clone-runtime.bat", string.Empty, logPrefix: LogPrefix);
         }
 
-        await job.LogAsync($"main commit: {GitHelper.GetCurrentCommitAsync(job, "runtime", "origin/main")}");
-        await job.LogAsync($"pr commit: {GitHelper.GetCurrentCommitAsync(job, "runtime", $"combineWith1/{job.PrBranch}")}");
+        await job.LogAsync($"main commit: {await GitHelper.GetCurrentCommitAsync(job, "runtime", "origin/main")}");
+        await job.LogAsync($"pr commit: {await GitHelper.GetCurrentCommitAsync(job, "runtime", $"combineWith1/{job.PrBranch}")}");
 
         string UpdateMergePlaceholders(string template)
         {
