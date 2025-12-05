@@ -25,6 +25,8 @@ internal sealed class JitDiffJob : JobBase
         Metadata[nameof(BaseRepo)] = Metadata[nameof(PrRepo)] = "dotnet/runtime";
         Metadata[nameof(BaseBranch)] = Metadata[nameof(PrBranch)] = "main";
 
+        bool firstBuild = true;
+
         while (true)
         {
             await WaitForPendingTasksAsync();
@@ -33,7 +35,9 @@ internal sealed class JitDiffJob : JobBase
 
             await DeleteBuildArtifactsForMainAsync();
 
-            await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
+            await BuildAndCopyRuntimeBranchBitsAsync(this, "main", canSkipRebuildOnMain: !firstBuild);
+            firstBuild = false;
+
             await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
 
             await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
@@ -154,9 +158,10 @@ internal sealed class JitDiffJob : JobBase
         await cloneRuntimeTask;
     }
 
-    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true)
+    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true, bool canSkipRebuildOnMain = false)
     {
-        canSkipRebuild &= branch == "pr" && !ForceRebuildAll();
+        canSkipRebuild &= !ForceRebuildAll();
+        canSkipRebuild &= canSkipRebuildOnMain || branch == "pr";
 
         (bool rebuildClr, bool rebuildLibs) = await ShouldRebuildAsync();
 
