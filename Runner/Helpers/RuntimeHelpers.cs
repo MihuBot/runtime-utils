@@ -87,6 +87,10 @@ internal static class RuntimeHelpers
                 git switch -c pr
                 """;
 
+            string installDependencies = runtimeAlreadyExists ?
+                "" :
+                "eng/common/native/install-dependencies.sh linux";
+
             string script = UpdateMergePlaceholders(
                 $$$"""
                 set -e
@@ -106,7 +110,7 @@ internal static class RuntimeHelpers
 
                 git switch {{{job.BaseBranch}}}
 
-                eng/common/native/install-dependencies.sh linux
+                {{{installDependencies}}}
                 """);
 
             await job.LogAsync($"Using runtime setup script:\n{script}");
