@@ -7,7 +7,7 @@ internal static class GitHelper
         List<string> lines = [];
 
         await job.RunProcessAsync("git",
-            $"diff --histogram {(fullContext ? "-U1000000" : "")} {leftFile} {rightFile}",
+            $"diff --no-index --histogram {(fullContext ? "-U1000000" : "")} {leftFile} {rightFile}",
             lines,
             checkExitCode: false,
             suppressOutputLogs: true,

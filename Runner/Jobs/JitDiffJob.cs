@@ -40,6 +40,8 @@ internal sealed class JitDiffJob : JobBase
 
             _lastBuiltMainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
 
+            await WaitForPendingTasksAsync();
+
             Stopwatch timeSinceLastBuild = Stopwatch.StartNew();
 
             while (timeSinceLastBuild.Elapsed.TotalMinutes < 30)
