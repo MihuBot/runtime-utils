@@ -5,14 +5,15 @@
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <NoWarn>${NoWarn};IDE0305</NoWarn>
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Azure.Storage.Blobs" Version="12.24.0" />
-    <PackageReference Include="Hardware.Info" Version="101.0.1" />
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.13.0" />
-    <PackageReference Include="System.IO.Pipelines" Version="9.0.3" />
-    <PackageReference Include="System.Linq.Async" Version="6.0.1" />
+    <PackageReference Include="Azure.Storage.Blobs" Version="12.26.0" />
+    <PackageReference Include="Hardware.Info" Version="101.1.0.1" />
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
+    <PackageReference Include="System.IO.Pipelines" Version="10.0.0" />
+    <PackageReference Include="System.Linq.Async" Version="7.0.0" />
   </ItemGroup>
 
 </Project>

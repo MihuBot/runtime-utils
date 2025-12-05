@@ -15,6 +15,8 @@ internal sealed class JitDiffJob : JobBase
     private const string CombinedDasmMainDirectory = "diffs-main-combined";
     private const string CombinedDasmPrDirectory = "diffs-pr-combined";
 
+    private string _lastBuiltMainCommit = "none";
+
     public JitDiffJob(HttpClient client, string runnerId, string runnerToken) : base(client, runnerId, runnerToken) { }
     public JitDiffJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
@@ -25,10 +27,18 @@ internal sealed class JitDiffJob : JobBase
 
         while (true)
         {
+            await WaitForPendingTasksAsync();
+
             await CloneRuntimeAndSetupToolsAsync(this);
 
-            await RunProcessAsync("bash", $"build.sh clr+libs -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", workDir: "runtime");
-            await RunProcessAsync("bash", "build.sh clr.jit -c Checked", workDir: "runtime");
+            await RunProcessAsync("rm", "-rf artifacts-main/*");
+            await RunProcessAsync("rm", "-rf clr-checked-main/*");
+            await RunProcessAsync("rm", $"-rf {DiffsMainDirectory}/*");
+
+            await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
+            await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
+
+            _lastBuiltMainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
 
             Stopwatch timeSinceLastBuild = Stopwatch.StartNew();
 
@@ -51,11 +61,16 @@ internal sealed class JitDiffJob : JobBase
 
         await CloneRuntimeAndSetupToolsAsync(this);
 
-        await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
+        bool mainAlreadyBuilt = await GitHelper.GetCurrentCommitAsync(this, "runtime") == _lastBuiltMainCommit;
+
+        if (!mainAlreadyBuilt)
+        {
+            await BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
+        }
 
         await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
-        await BuildAndCopyRuntimeBranchBitsAsync(this, "pr");
+        await BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false);
 
         Task downloadExtraAssemblies = DownloadExtraTestAssembliesAsync();
 
@@ -63,7 +78,7 @@ internal sealed class JitDiffJob : JobBase
 
         await downloadExtraAssemblies;
 
-        string diffAnalyzeSummary = await CollectFrameworksDiffsAsync();
+        string diffAnalyzeSummary = await CollectFrameworksDiffsAsync(skipMain: mainAlreadyBuilt);
 
         await UploadJitDiffExamplesAsync(diffAnalyzeSummary, regressions: true);
         await UploadJitDiffExamplesAsync(diffAnalyzeSummary, regressions: false);
@@ -274,12 +289,12 @@ internal sealed class JitDiffJob : JobBase
         }
     }
 
-    private async Task<string> CollectFrameworksDiffsAsync()
+    private async Task<string> CollectFrameworksDiffsAsync(bool skipMain)
     {
         try
         {
             await Task.WhenAll(
-                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory),
+                skipMain ? Task.CompletedTask : JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory),
                 JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
 
             await Task.WhenAll(
