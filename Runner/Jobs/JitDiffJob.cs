@@ -74,10 +74,7 @@ internal sealed class JitDiffJob : JobBase
 
         await CloneRuntimeAndSetupToolsAsync(this);
 
-        string mainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
-        await LogAsync($"main commit: {mainCommit}");
-
-        bool mainAlreadyBuilt = mainCommit == _lastBuiltMainCommit;
+        bool mainAlreadyBuilt = await GitHelper.GetCurrentCommitAsync(this, "runtime") == _lastBuiltMainCommit;
 
         if (!mainAlreadyBuilt)
         {
