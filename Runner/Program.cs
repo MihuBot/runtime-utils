@@ -1,6 +1,4 @@
-﻿using Microsoft.CodeAnalysis;
-
-try
+﻿try
 {
     await RunAsync(args);
 }

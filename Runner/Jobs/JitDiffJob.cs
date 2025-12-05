@@ -25,6 +25,8 @@ internal sealed class JitDiffJob : JobBase
         Metadata[nameof(BaseRepo)] = Metadata[nameof(PrRepo)] = "dotnet/runtime";
         Metadata[nameof(BaseBranch)] = Metadata[nameof(PrBranch)] = "main";
 
+        await RunProcessAsync("apt-get", "update");
+
         bool firstBuild = true;
 
         while (true)

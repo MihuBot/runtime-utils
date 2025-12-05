@@ -249,15 +249,6 @@ public abstract class JobBase
     {
         message = $"[{FormatElapsedTime(ElapsedTime)}] {message}";
 
-        if (!Live)
-        {
-            lock (Console.Out)
-            {
-                Console.WriteLine(message);
-            }
-            return;
-        }
-
         lock (_lastLogEntry)
         {
             _lastLogEntry.Restart();
@@ -349,7 +340,18 @@ public abstract class JobBase
                     messages.Add(message);
                 }
 
-                await PostJobsJsonAsync("Logs", messages);
+                if (Live)
+                {
+                    await PostJobsJsonAsync("Logs", messages);
+                }
+                else
+                {
+                    foreach (string message in messages)
+                    {
+                        Console.WriteLine(message);
+                    }
+                }
+
                 messages.Clear();
             }
         }
