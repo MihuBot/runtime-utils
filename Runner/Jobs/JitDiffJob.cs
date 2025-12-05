@@ -88,7 +88,10 @@ internal sealed class JitDiffJob : JobBase
 
         Task downloadExtraAssemblies = DownloadExtraTestAssembliesAsync();
 
-        await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+        if (!UsingPreparedRunner)
+        {
+            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+        }
 
         await downloadExtraAssemblies;
 
