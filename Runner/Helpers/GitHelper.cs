@@ -61,12 +61,12 @@ internal static class GitHelper
         return lines;
     }
 
-    public static async Task<string> GetCurrentCommitAsync(JobBase job, string workDir)
+    public static async Task<string> GetCurrentCommitAsync(JobBase job, string workDir, string? branch = null)
     {
         List<string> lines = [];
 
         await job.RunProcessAsync("git",
-            "log -1 --pretty=format:%H",
+            $"log {branch} -1 --pretty=format:%H",
             lines,
             workDir: workDir,
             checkExitCode: false,

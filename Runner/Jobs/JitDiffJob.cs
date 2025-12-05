@@ -31,12 +31,12 @@ internal sealed class JitDiffJob : JobBase
 
             await CloneRuntimeAndSetupToolsAsync(this);
 
-            await RunProcessAsync("rm", "-rf artifacts-main/*");
-            await RunProcessAsync("rm", "-rf clr-checked-main/*");
-            await RunProcessAsync("rm", $"-rf {DiffsMainDirectory}/*");
+            await DeleteBuildArtifactsForMainAsync();
 
             await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
             await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
+
+            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
 
             _lastBuiltMainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
 
@@ -52,6 +52,13 @@ internal sealed class JitDiffJob : JobBase
         }
     }
 
+    private async Task DeleteBuildArtifactsForMainAsync()
+    {
+        await RunProcessAsync("rm", "-rf artifacts-main/*");
+        await RunProcessAsync("rm", "-rf clr-checked-main/*");
+        await RunProcessAsync("rm", $"-rf {DiffsMainDirectory}/*");
+    }
+
     protected override async Task RunJobCoreAsync()
     {
         if (!UsingPreparedRunner)
@@ -61,10 +68,15 @@ internal sealed class JitDiffJob : JobBase
 
         await CloneRuntimeAndSetupToolsAsync(this);
 
-        bool mainAlreadyBuilt = await GitHelper.GetCurrentCommitAsync(this, "runtime") == _lastBuiltMainCommit;
+        string mainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
+        await LogAsync($"main commit: {mainCommit}");
+
+        bool mainAlreadyBuilt = mainCommit == _lastBuiltMainCommit;
 
         if (!mainAlreadyBuilt)
         {
+            await DeleteBuildArtifactsForMainAsync();
+
             await BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
         }
 
