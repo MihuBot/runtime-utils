@@ -35,7 +35,7 @@ internal sealed class JitDiffJob : JobBase
 
             await CloneRuntimeAndSetupToolsAsync(this);
 
-            await DeleteBuildArtifactsForMainAsync();
+            DeleteBuildArtifactsForMain();
 
             await BuildAndCopyRuntimeBranchBitsAsync(this, "main", canSkipRebuildOnMain: !firstBuild);
             firstBuild = false;
@@ -60,11 +60,17 @@ internal sealed class JitDiffJob : JobBase
         }
     }
 
-    private async Task DeleteBuildArtifactsForMainAsync()
+    private static void DeleteBuildArtifactsForMain()
     {
-        await RunProcessAsync("rm", "-rf artifacts-main/*");
-        await RunProcessAsync("rm", "-rf clr-checked-main/*");
-        await RunProcessAsync("rm", $"-rf {DiffsMainDirectory}/*");
+        DeleteAndCreateEmptyDir("artifacts-main");
+        DeleteAndCreateEmptyDir("clr-checked-main");
+        DeleteAndCreateEmptyDir(DiffsMainDirectory);
+
+        static void DeleteAndCreateEmptyDir(string path)
+        {
+            Directory.Delete(path, recursive: true);
+            Directory.CreateDirectory(path);
+        }
     }
 
     protected override async Task RunJobCoreAsync()
@@ -80,7 +86,7 @@ internal sealed class JitDiffJob : JobBase
 
         if (!mainAlreadyBuilt)
         {
-            await DeleteBuildArtifactsForMainAsync();
+            DeleteBuildArtifactsForMain();
 
             await BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
         }
