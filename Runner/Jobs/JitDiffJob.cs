@@ -231,7 +231,15 @@ internal sealed class JitDiffJob : JobBase
                     {
                         libs = true;
                     }
-                    else if (!file.StartsWith("src/tests/", StringComparison.OrdinalIgnoreCase))
+                    else if (
+                        file.StartsWith("src/tests/", StringComparison.OrdinalIgnoreCase) ||
+                        file.StartsWith("docs/", StringComparison.OrdinalIgnoreCase) ||
+                        file.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ||
+                        file is "LICENSE.TXT" or "PATENTS.TXT" or "THIRD-PARTY-NOTICES.TXT")
+                    {
+                        // Not interesting
+                    }
+                    else
                     {
                         clr = true;
                         libs = true;
