@@ -27,24 +27,24 @@ internal sealed class JitDiffJob : JobBase
 
         await RunProcessAsync("apt-get", "update");
 
-        bool firstBuild = true;
-
         while (true)
         {
             await WaitForPendingTasksAsync();
 
             await CloneRuntimeAndSetupToolsAsync(this);
 
-            DeleteBuildArtifactsForMain();
+            if (await GitHelper.GetCurrentCommitAsync(this, "runtime") != _lastBuiltMainCommit)
+            {
+                DeleteBuildArtifactsForMain();
 
-            await BuildAndCopyRuntimeBranchBitsAsync(this, "main", canSkipRebuildOnMain: !firstBuild);
-            firstBuild = false;
+                await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
 
-            await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
+                await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
 
-            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+                await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
 
-            _lastBuiltMainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
+                _lastBuiltMainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
+            }
 
             await WaitForPendingTasksAsync();
 
@@ -163,10 +163,10 @@ internal sealed class JitDiffJob : JobBase
         await cloneRuntimeTask;
     }
 
-    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true, bool canSkipRebuildOnMain = false)
+    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true)
     {
         canSkipRebuild &= !ForceRebuildAll();
-        canSkipRebuild &= canSkipRebuildOnMain || branch == "pr";
+        canSkipRebuild &= branch == "pr";
 
         (bool rebuildClr, bool rebuildLibs) = await ShouldRebuildAsync();
 
