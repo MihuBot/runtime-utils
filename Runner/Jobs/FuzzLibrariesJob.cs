@@ -229,7 +229,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             await ZipAndUploadArtifactAsync(inputsDirectory, inputsDirectory);
 
             await RunProcessAsync(
-                $"{fuzzerDirectory}/../collect-coverage.ps1",
+                $"{DeploymentPath}/../collect-coverage.ps1",
                 $"{fuzzerName} {inputsDirectory} -OutputDir {coverageDirectory}",
                 logPrefix: $"{nameWithoutFuzzerSuffix} coverage",
                 checkExitCode: false);
