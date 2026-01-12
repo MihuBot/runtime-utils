@@ -1,0 +1,7 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="../.github/workflows/run-script.yml" />
+    <File Path="../azure-pipelines.yml" />
+  </Folder>
+  <Project Path="Runner.csproj" />
+</Solution>
