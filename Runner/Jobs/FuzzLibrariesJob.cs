@@ -139,6 +139,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
         string fuzzerDirectory = $"{DeploymentPath}/{fuzzerName}";
         string inputsDirectory = $"{fuzzerName}-inputs";
         string artifactPathPrefix = $"{fuzzerName}-artifact-";
+        string coverageDirectory = $"{fuzzerName}-coverage";
 
         Directory.CreateDirectory(inputsDirectory);
 
@@ -215,7 +216,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
                 int remaining = durationSeconds - (int)stopwatch.Elapsed.TotalSeconds;
                 if (remaining > 0)
                 {
-                    LastProgressSummary = $"Running {nameWithoutFuzzerSuffix}. Estimated time: {remaining / 60} min";
+                    LastProgressSummary = $"Running {nameWithoutFuzzerSuffix}. Remaining time: ~{remaining / 60} min";
                 }
             }
         }
@@ -226,6 +227,14 @@ internal sealed partial class FuzzLibrariesJob : JobBase
         if (Directory.EnumerateFiles(inputsDirectory).Any())
         {
             await ZipAndUploadArtifactAsync(inputsDirectory, inputsDirectory);
+
+            await RunProcessAsync(
+                $"{fuzzerDirectory}/../collect-coverage.ps1",
+                $"{fuzzerName} {inputsDirectory} -OutputDir {coverageDirectory}",
+                logPrefix: $"{nameWithoutFuzzerSuffix} coverage",
+                checkExitCode: false);
+
+            await ZipAndUploadArtifactAsync(coverageDirectory, coverageDirectory);
         }
 
         return failureStackUploaded == 0;
