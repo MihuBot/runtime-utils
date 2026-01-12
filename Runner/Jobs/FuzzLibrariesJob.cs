@@ -229,8 +229,8 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             await ZipAndUploadArtifactAsync(inputsDirectory, inputsDirectory);
 
             await RunProcessAsync(
-                $"{DeploymentPath}/../collect-coverage.ps1",
-                $"{fuzzerName} {inputsDirectory} -OutputDir {coverageDirectory}",
+                "powershell.exe",
+                $"-File \"{DeploymentPath}/../collect-coverage.ps1\" {fuzzerName} {inputsDirectory} -OutputDir {coverageDirectory}",
                 logPrefix: $"{nameWithoutFuzzerSuffix} coverage",
                 checkExitCode: false);
 
