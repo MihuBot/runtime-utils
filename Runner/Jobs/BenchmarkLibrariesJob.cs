@@ -64,15 +64,20 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             }
 
             await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
-
             await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
 
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
 
+        string lastBenchmarkTfm = DotnetVersionRegex().Matches(File.ReadAllText("performance/src/benchmarks/micro/MicroBenchmarks.csproj"))
+            .Select(m => m.Groups[1].Value) // 9.0, 10.0, 11.0, ...
+            .MaxBy(v => int.Parse(v.Split('.')[0]))!;
+
+        await RuntimeHelpers.InstallDotnetDailySdkAsync(this, lastBenchmarkTfm);
+
         await WaitForPendingTasksAsync();
 
-        await RunBenchmarksAsync(coreRuns);
+        await RunBenchmarksAsync(coreRuns, lastBenchmarkTfm);
     }
 
     private async Task CloneDotnetPerformanceAndSetupToolsAsync()
@@ -210,7 +215,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         return entries.Select(entry => $"{entry.Directory}/corerun").ToArray();
     }
 
-    private async Task RunBenchmarksAsync(string[] coreRunPaths)
+    private async Task RunBenchmarksAsync(string[] coreRunPaths, string dotnetVersion)
     {
         const string HiddenColumns = "Job StdDev RatioSD Median Min Max OutlierMode MemoryRandomization Gen0 Gen1 Gen2";
 
@@ -221,8 +226,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             filter = $"*{filter}*";
         }
-
-        int dotnetVersion = RuntimeHelpers.GetDotnetVersion("performance");
 
         string coreRuns = string.Join(' ', coreRunPaths.Select(Path.GetFullPath));
 
@@ -238,7 +241,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         string? artifactsDir = null;
 
         await RunProcessAsync("/usr/lib/dotnet/dotnet",
-            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
+            $"run -c Release --framework net{dotnetVersion} -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
             processLogs: line =>
             {
@@ -377,4 +380,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     [GeneratedRegex(@"BenchmarkDotNet\.(\d.*?)\.nupkg")]
     private static partial Regex BenchmarkDotNetPackageVersionRegex();
+
+    [GeneratedRegex(@"[^w]net(\d{1,2}\.\d)[^\d]")]
+    private static partial Regex DotnetVersionRegex();
 }
