@@ -208,13 +208,13 @@ internal static class RuntimeHelpers
     public static async Task InstallDotnetSdkAsync(JobBase job, string globalJsonPath)
     {
         await GetDotnetInstallScriptAsync(job);
-        await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir /usr/lib/dotnet");
+        await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir /usr/lib/dotnet-installs");
     }
 
     public static async Task InstallDotnetDailySdkAsync(JobBase job, string channel)
     {
         await GetDotnetInstallScriptAsync(job);
-        await job.RunProcessAsync("bash", $"dotnet-install.sh --channel {channel} --quality daily --install-dir /usr/lib/dotnet");
+        await job.RunProcessAsync("bash", $"dotnet-install.sh --channel {channel} --quality daily --install-dir /usr/lib/dotnet-installs");
     }
 
     private static async Task GetDotnetInstallScriptAsync(JobBase job)
