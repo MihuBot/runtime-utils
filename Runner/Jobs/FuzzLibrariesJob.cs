@@ -53,6 +53,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             $$"""
             cd runtime\src\libraries\Fuzzing\DotnetFuzzing
             ..\..\..\..\.dotnet\dotnet build-server shutdown
+            dotnet build-server shutdown
             ..\..\..\..\.dotnet\dotnet build
             ..\..\..\..\.dotnet\dotnet tool install --tool-path . SharpFuzz.CommandLine
             call run.bat
