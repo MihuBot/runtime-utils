@@ -47,13 +47,15 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             git switch pr
 
             call .\build.cmd clr+libs -rc Checked -c Debug {{RuntimeHelpers.LibrariesExtraBuildArgs}}
+
+            .dotnet\dotnet build-server shutdown
+            cd ..
+            dotnet build-server shutdown
             """);
 
         File.WriteAllText(PrepareFuzzerBat,
             $$"""
             cd runtime\src\libraries\Fuzzing\DotnetFuzzing
-            ..\..\..\..\.dotnet\dotnet build-server shutdown
-            dotnet build-server shutdown
             ..\..\..\..\.dotnet\dotnet build
             ..\..\..\..\.dotnet\dotnet tool install --tool-path . SharpFuzz.CommandLine
             call run.bat
