@@ -209,7 +209,11 @@ internal static class RuntimeHelpers
     {
         AssertIsLinux();
 
-        await job.RunProcessAsync("wget", "https://dot.net/v1/dotnet-install.sh");
+        if (!File.Exists("dotnet-install.sh"))
+        {
+            await job.RunProcessAsync("wget", "https://dot.net/v1/dotnet-install.sh");
+        }
+
         await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir /usr/lib/dotnet");
     }
 
