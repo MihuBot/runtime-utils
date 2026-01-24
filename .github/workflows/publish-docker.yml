@@ -7,7 +7,7 @@ on:
 
 jobs:
   push_to_registry:
-    if: github.repository == 'MihuBot/runtime-utils'
+    if: github.repository == 'MihuBot/runtime-utils' && contains(github.event.head_commit.message, 'docker')
     name: Push Docker image to Docker Hub
     runs-on: ubuntu-latest
     steps:
