@@ -3,6 +3,7 @@
     <File Path="../.github/workflows/publish-docker.yml" />
     <File Path="../.github/workflows/run-script.yml" />
     <File Path="../azure-pipelines.yml" />
+    <File Path="../NuGet.config" />
   </Folder>
   <Project Path="Runner.csproj" />
 </Solution>

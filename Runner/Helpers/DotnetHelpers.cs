@@ -4,20 +4,35 @@ internal static class DotnetHelpers
 {
     public static async Task KillRemainingDotnetProcessesAsync(JobBase job)
     {
-        string[] processNames = ["dotnet", "MSBuild", "corerun", "superpmi", "test_fx_ver", ".NET Host"];
+        foreach (Process proc in Process.GetProcesses())
+        {
+            try
+            {
+                string name = proc.ProcessName;
 
-        if (OperatingSystem.IsWindows())
-        {
-            foreach (string processName in processNames)
-            {
-                await job.RunProcessAsync("taskkill", $"/IM \"{processName}.exe\" /F", logPrefix: "Cleanup .NET processes", checkExitCode: false);
+                if (name.Contains("dotnet", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("MSBuild", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("corerun", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("superpmi", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains("test_fx_ver", StringComparison.OrdinalIgnoreCase) ||
+                    name.Contains(".NET Host", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (proc.Id == Environment.ProcessId)
+                    {
+                        continue;
+                    }
+
+                    await job.LogAsync($"Killing process {proc.Id} ({proc.ProcessName})");
+                    proc.Kill(entireProcessTree: true);
+                }
             }
-        }
-        else
-        {
-            foreach (string processName in processNames)
+            catch (Exception ex)
             {
-                await job.RunProcessAsync("pkill", $"-f \"{processName}\"", logPrefix: "Cleanup .NET processes", checkExitCode: false);
+                await job.LogAsync($"Failed to kill process {proc.Id} ({proc.ProcessName}): {ex}");
+            }
+            finally
+            {
+                proc.Dispose();
             }
         }
     }
