@@ -200,21 +200,23 @@ internal static class RuntimeHelpers
         }
     }
 
-    public static async Task InstallRuntimeDotnetSdkAsync(JobBase job)
+    public static async Task InstallRuntimeDotnetSdkAsync(JobBase job, string? installDir = null)
     {
-        await InstallDotnetSdkAsync(job, "runtime/global.json");
+        await InstallDotnetSdkAsync(job, "runtime/global.json", installDir);
     }
 
-    public static async Task InstallDotnetSdkAsync(JobBase job, string globalJsonPath)
+    public static async Task InstallDotnetSdkAsync(JobBase job, string globalJsonPath, string? installDir = null)
     {
         AssertIsLinux();
+
+        installDir ??= "/usr/lib/dotnet";
 
         if (!File.Exists("dotnet-install.sh"))
         {
             await job.RunProcessAsync("wget", "https://dot.net/v1/dotnet-install.sh");
         }
 
-        await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir /usr/lib/dotnet");
+        await job.RunProcessAsync("bash", $"dotnet-install.sh --jsonfile {globalJsonPath} --install-dir {installDir}");
     }
 
     public static async Task CopyReleaseArtifactsAsync(JobBase job, string logPrefix, string destination, string runtimeConfig = "Release")

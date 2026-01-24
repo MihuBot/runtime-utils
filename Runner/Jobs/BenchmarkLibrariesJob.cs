@@ -4,6 +4,8 @@ namespace Runner.Jobs;
 
 internal sealed partial class BenchmarkLibrariesJob : JobBase
 {
+    private const string DotnetInstallDir = "dotnet-performance";
+
     public BenchmarkLibrariesJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
     protected override async Task RunJobCoreAsync()
@@ -30,7 +32,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             await clonePerformanceTask;
 
-            PendingTasks.Enqueue(RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json"));
+            PendingTasks.Enqueue(RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json", DotnetInstallDir));
 
             coreRuns = await DownloadCoreRootsAsync(entries);
         }
@@ -63,9 +65,9 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
             }
 
-            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this, DotnetInstallDir);
 
-            await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
+            await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json", DotnetInstallDir);
 
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
@@ -229,7 +231,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         int dotnetVersion = RuntimeHelpers.GetDotnetVersion("performance");
 
-        string coreRuns = string.Join(' ', coreRunPaths.Select(Path.GetFullPath));
+        string coreRuns = string.Join(' ', coreRunPaths.Select(p => $"\"{Path.GetFullPath(p)}\""));
 
         int coreCount = (int)(HardwareInfo?.CpuList.First().NumberOfCores ?? 0);
         if (coreCount > Environment.ProcessorCount)
@@ -242,8 +244,10 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         string? artifactsDir = null;
 
-        await RunProcessAsync("/usr/lib/dotnet/dotnet",
-            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
+        string dotnetPath = Path.GetFullPath($"{DotnetInstallDir}/dotnet");
+
+        await RunProcessAsync(dotnetPath,
+            $"run -c Release --framework net{dotnetVersion}.0 -- --cli \"{dotnetPath}\" --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
             processLogs: line =>
             {
