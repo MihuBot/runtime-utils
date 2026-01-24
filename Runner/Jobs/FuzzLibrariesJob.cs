@@ -71,6 +71,9 @@ internal sealed partial class FuzzLibrariesJob : JobBase
         }
 
         await RunProcessAsync(BuildRuntimeBat, string.Empty);
+
+        await DotnetHelpers.KillRemainingDotnetProcessesAsync(this);
+
         await RunProcessAsync(PrepareFuzzerBat, string.Empty);
 
         static void Patch(string path, Func<string, string> patch)
