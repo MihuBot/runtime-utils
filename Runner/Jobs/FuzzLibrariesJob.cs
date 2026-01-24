@@ -165,7 +165,12 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             await LogAsync($"Failed to download previous inputs archive: {ex}");
         }
 
-        int parallelism = Math.Max(1, Environment.ProcessorCount - 1);
+        int parallelism = Environment.ProcessorCount;
+        if (parallelism > 4)
+        {
+            parallelism--;
+        }
+
         await LogAsync($"Starting {parallelism} parallel fuzzer instances");
 
         using CancellationTokenSource failureCts = new();
@@ -222,7 +227,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
                 int remaining = durationSeconds - (int)stopwatch.Elapsed.TotalSeconds;
                 if (remaining > 0)
                 {
-                    LastProgressSummary = $"Running {nameWithoutFuzzerSuffix}. Remaining time: ~{remaining / 60} min";
+                    LastProgressSummary = $"Remaining time for {nameWithoutFuzzerSuffix}: ~{remaining / 60} min";
                 }
             }
         }
