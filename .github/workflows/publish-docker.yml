@@ -7,6 +7,7 @@ on:
 
 jobs:
   push_to_registry:
+    if: github.repository == 'MihuBot/runtime-utils'
     name: Push Docker image to Docker Hub
     runs-on: ubuntu-latest
     steps:
