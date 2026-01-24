@@ -127,15 +127,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 File.WriteAllText(Path, source);
             }
 
-            {
-                // Temp hack to disable net11.0 until we have an SDK that supports it
-                const string Path = "performance/src/benchmarks/micro/MicroBenchmarks.csproj";
-                File.WriteAllText(Path, File.ReadAllText(Path).Replace(
-                    "<SupportedTargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0;net11.0</SupportedTargetFrameworks>",
-                    "<SupportedTargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0</SupportedTargetFrameworks>",
-                    StringComparison.Ordinal));
-            }
-
             if (TryGetFlag("parallel"))
             {
                 {
