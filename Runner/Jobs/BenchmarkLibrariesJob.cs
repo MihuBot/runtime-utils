@@ -32,7 +32,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             await clonePerformanceTask;
 
-            PendingTasks.Enqueue(Task.Run(InstallDotnetSdksAsync));
+            PendingTasks.Enqueue(DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion(), DotnetInstallDir));
 
             coreRuns = await DownloadCoreRootsAsync(entries);
         }
@@ -65,7 +65,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
             }
 
-            await InstallDotnetSdksAsync();
+            await DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion(), DotnetInstallDir);
 
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
@@ -73,12 +73,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         await WaitForPendingTasksAsync();
 
         await RunBenchmarksAsync(coreRuns);
-
-        async Task InstallDotnetSdksAsync()
-        {
-            await DotnetHelpers.InstallDotnetSdkAsync(this, "performance/global.json", DotnetInstallDir);
-            await DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion(), DotnetInstallDir);
-        }
     }
 
     private async Task CloneDotnetPerformanceAndSetupToolsAsync()
