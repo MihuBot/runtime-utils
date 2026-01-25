@@ -4,8 +4,6 @@ namespace Runner.Jobs;
 
 internal sealed partial class BenchmarkLibrariesJob : JobBase
 {
-    private const string DotnetInstallDir = "dotnet-performance";
-
     public BenchmarkLibrariesJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
     protected override async Task RunJobCoreAsync()
@@ -32,7 +30,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             await clonePerformanceTask;
 
-            PendingTasks.Enqueue(DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion(), DotnetInstallDir));
+            PendingTasks.Enqueue(DotnetHelpers.InstallDotnetSdkAsync(this, "performance/global.json"));
 
             coreRuns = await DownloadCoreRootsAsync(entries);
         }
@@ -65,7 +63,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
             }
 
-            await DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion(), DotnetInstallDir);
+            await DotnetHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
 
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
@@ -82,6 +80,13 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             (string repo, string branch) = GetDotnetPerformanceRepoSource();
 
             await RunProcessAsync("git", $"clone --no-tags --depth=1 -b {branch} --progress https://github.com/{repo} performance", logPrefix: "Clone performance");
+
+            if (repo == "dotnet/performance" && branch == "main")
+            {
+                // Performance's global.json is out of date
+                byte[] bytes = await HttpClient.GetByteArrayAsync("https://raw.githubusercontent.com/dotnet/runtime/refs/heads/main/global.json");
+                await File.WriteAllBytesAsync("performance/global.json", bytes);
+            }
 
             if (TryGetFlag("medium") || TryGetFlag("long"))
             {
@@ -195,23 +200,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         }
     }
 
-    private int GetPerformanceDotnetVersion()
-    {
-        string source = File.ReadAllText("performance/src/benchmarks/micro/MicroBenchmarks.csproj");
-        // <SupportedTargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0;net11.0</SupportedTargetFrameworks>
-
-        Match match = DotnetVersionFromCsprojRegex().Match(source);
-
-        if (!match.Success)
-        {
-            throw new Exception("Failed to determine the dotnet version from MicroBenchmarks.csproj");
-        }
-
-        // ["net6.0", "net7.0", ...]
-        string[] frameworks = match.Groups[1].Value.Split(';', StringSplitOptions.RemoveEmptyEntries);
-        return frameworks.Max(f => int.Parse(f.AsSpan(3, f.IndexOf('.') - 3)));
-    }
-
     private async Task<string[]> DownloadCoreRootsAsync(CoreRootAPI.CoreRootEntry[] entries)
     {
         for (int i = 0; i < entries.Length; i++)
@@ -248,7 +236,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             filter = $"*{filter}*";
         }
 
-        int dotnetVersion = GetPerformanceDotnetVersion();
+        int dotnetVersion = DotnetHelpers.GetDotnetVersion("performance");
 
         string coreRuns = string.Join(' ', coreRunPaths.Select(p => $"\"{Path.GetFullPath(p)}\""));
 
@@ -263,10 +251,8 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         string? artifactsDir = null;
 
-        string dotnetPath = Path.GetFullPath($"{DotnetInstallDir}/dotnet");
-
-        await RunProcessAsync(dotnetPath,
-            $"run -c Release --framework net{dotnetVersion}.0 -- --cli \"{dotnetPath}\" --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
+        await RunProcessAsync("/usr/lib/dotnet/dotnet",
+            $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
             processLogs: line =>
             {
@@ -405,7 +391,4 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     [GeneratedRegex(@"BenchmarkDotNet\.(\d.*?)\.nupkg")]
     private static partial Regex BenchmarkDotNetPackageVersionRegex();
-
-    [GeneratedRegex(@"Frameworks>((?:net\d+\.\d+);?)+<\/")]
-    private static partial Regex DotnetVersionFromCsprojRegex();
 }

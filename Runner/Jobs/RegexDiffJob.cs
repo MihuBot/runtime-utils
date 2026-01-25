@@ -567,7 +567,7 @@ internal sealed class RegexDiffJob : JobBase
                     <Project Sdk="Microsoft.NET.Sdk">
                       <PropertyGroup>
                         <OutputType>Library</OutputType>
-                        <TargetFramework>net{RuntimeHelpers.GetDotnetVersion()}.0</TargetFramework>
+                        <TargetFramework>net{DotnetHelpers.GetDotnetVersion()}.0</TargetFramework>
                         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
                       </PropertyGroup>
                     </Project>

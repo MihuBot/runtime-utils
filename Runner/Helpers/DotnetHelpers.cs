@@ -37,6 +37,16 @@ internal static class DotnetHelpers
         }
     }
 
+    public static int GetDotnetVersion(string repository = "runtime")
+    {
+        // "version": "10.0.100-preview.1.12345.6", => 10
+        return int.Parse(File.ReadAllLines($"{repository}/global.json")
+            .First(line => line.Contains("version", StringComparison.OrdinalIgnoreCase))
+            .Split(':')[1] //  "10.0.100-preview.1.12345.6"
+            .Split('.')[0] //  "10
+            .TrimStart(' ', '"'));
+    }
+
     public static async Task InstallDotnetSdkAsync(JobBase job, string globalJsonPath, string? installDir = null) =>
         await InstallDotnetSdkAsyncCore(job, $"--jsonfile {globalJsonPath}", installDir);
 
