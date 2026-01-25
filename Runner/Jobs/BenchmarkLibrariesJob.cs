@@ -126,7 +126,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 string source = File.ReadAllText(Path);
                 source = source.Replace(
                     "<OutputType>Exe</OutputType>",
-                    "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>\r\n    <OutputType>Exe</OutputType>",
+                    "<NoWarn>$(NoWarn);NU1605</NoWarn>\r\n    <OutputType>Exe</OutputType>",
                     StringComparison.OrdinalIgnoreCase);
                 File.WriteAllText(Path, source);
             }
