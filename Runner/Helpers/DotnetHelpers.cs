@@ -36,4 +36,22 @@ internal static class DotnetHelpers
             }
         }
     }
+
+    public static async Task InstallDotnetSdkAsync(JobBase job, string globalJsonPath, string? installDir = null) =>
+        await InstallDotnetSdkAsyncCore(job, $"--jsonfile {globalJsonPath}", installDir);
+
+    public static async Task InstallDotnetDailySdkAsync(JobBase job, int version, string? installDir = null) =>
+        await InstallDotnetSdkAsyncCore(job, $"--channel {version}.0 --quality daily", installDir);
+
+    private static async Task InstallDotnetSdkAsyncCore(JobBase job, string versionArgs, string? installDir = null)
+    {
+        installDir ??= "/usr/lib/dotnet";
+
+        if (!File.Exists("dotnet-install.sh"))
+        {
+            await job.RunProcessAsync("wget", "https://dot.net/v1/dotnet-install.sh");
+        }
+
+        await job.RunProcessAsync("bash", $"dotnet-install.sh {versionArgs} --install-dir {installDir}");
+    }
 }

@@ -32,7 +32,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             await clonePerformanceTask;
 
-            PendingTasks.Enqueue(RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json", DotnetInstallDir));
+            PendingTasks.Enqueue(Task.Run(InstallDotnetSdksAsync));
 
             coreRuns = await DownloadCoreRootsAsync(entries);
         }
@@ -65,22 +65,20 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
             }
 
-            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this, DotnetInstallDir);
-
-            await RuntimeHelpers.InstallDotnetSdkAsync(this, "performance/global.json", DotnetInstallDir);
+            await InstallDotnetSdksAsync();
 
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
 
         await WaitForPendingTasksAsync();
 
-        try
-        {
-            File.Delete("../NuGet.config");
-        }
-        catch { }
-
         await RunBenchmarksAsync(coreRuns);
+
+        async Task InstallDotnetSdksAsync()
+        {
+            await DotnetHelpers.InstallDotnetSdkAsync(this, "performance/global.json", DotnetInstallDir);
+            await DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion(), DotnetInstallDir);
+        }
     }
 
     private async Task CloneDotnetPerformanceAndSetupToolsAsync()
@@ -193,6 +191,23 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         }
     }
 
+    private int GetPerformanceDotnetVersion()
+    {
+        string source = File.ReadAllText("performance/src/benchmarks/micro/MicroBenchmarks.csproj");
+        // <SupportedTargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0;net11.0</SupportedTargetFrameworks>
+
+        Match match = DotnetVersionFromCsprojRegex().Match(source);
+
+        if (!match.Success)
+        {
+            throw new Exception("Failed to determine the dotnet version from MicroBenchmarks.csproj");
+        }
+
+        // ["net6.0", "net7.0", ...]
+        string[] frameworks = match.Groups[1].Value.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        return frameworks.Max(f => int.Parse(f.AsSpan(3, f.IndexOf('.') - 3)));
+    }
+
     private async Task<string[]> DownloadCoreRootsAsync(CoreRootAPI.CoreRootEntry[] entries)
     {
         for (int i = 0; i < entries.Length; i++)
@@ -229,7 +244,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             filter = $"*{filter}*";
         }
 
-        int dotnetVersion = RuntimeHelpers.GetDotnetVersion("performance");
+        int dotnetVersion = GetPerformanceDotnetVersion();
 
         string coreRuns = string.Join(' ', coreRunPaths.Select(p => $"\"{Path.GetFullPath(p)}\""));
 
@@ -386,4 +401,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     [GeneratedRegex(@"BenchmarkDotNet\.(\d.*?)\.nupkg")]
     private static partial Regex BenchmarkDotNetPackageVersionRegex();
+
+    [GeneratedRegex(@"Frameworks>((?:net\d+\.\d+);?)+<\/")]
+    private static partial Regex DotnetVersionFromCsprojRegex();
 }
