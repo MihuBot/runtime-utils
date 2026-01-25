@@ -121,6 +121,16 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 File.WriteAllText(Path, source);
             }
 
+            {
+                const string Path = "performance/src/benchmarks/micro/MicroBenchmarks.csproj";
+                string source = File.ReadAllText(Path);
+                source = source.Replace(
+                    "<OutputType>Exe</OutputType>",
+                    "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>\r\n    <OutputType>Exe</OutputType>",
+                    StringComparison.OrdinalIgnoreCase);
+                File.WriteAllText(Path, source);
+            }
+
             if (TryGetFlag("parallel"))
             {
                 {
