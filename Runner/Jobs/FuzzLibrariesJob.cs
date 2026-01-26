@@ -119,6 +119,7 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             TryGetFlag("long") ? int.MaxValue :
             TryGetFlag("short") ? 600 :
             TryGetFlag("dry") ? 60 :
+            TryGetArgument("duration", out int sec) ? sec :
             3600;
 
         for (int i = 0; i < matchingFuzzers.Length; i++)

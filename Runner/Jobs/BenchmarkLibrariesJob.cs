@@ -82,8 +82,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             await RunProcessAsync("git", $"clone --no-tags --depth=1 -b {branch} --progress https://github.com/{repo} performance", logPrefix: "Clone performance");
 
             // Performance's global.json is out of date
-            byte[] bytes = await HttpClient.GetByteArrayAsync("https://raw.githubusercontent.com/dotnet/runtime/refs/heads/main/global.json");
-            await File.WriteAllBytesAsync("performance/global.json", bytes);
+            await File.WriteAllBytesAsync("performance/global.json", await HttpClient.GetByteArrayAsync("https://raw.githubusercontent.com/dotnet/runtime/refs/heads/main/global.json"));
 
             if (TryGetFlag("medium") || TryGetFlag("long"))
             {

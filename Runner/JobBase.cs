@@ -59,7 +59,19 @@ public abstract class JobBase
             : @default;
     }
 
-    private bool TryGetArgument(string argument, [NotNullWhen(true)] out string? value)
+    public bool TryGetArgument(string argument, out int value)
+    {
+        if (TryGetArgument(argument, out string? stringValue) &&
+            int.TryParse(stringValue, out value))
+        {
+            return true;
+        }
+
+        value = 0;
+        return false;
+    }
+
+    public bool TryGetArgument(string argument, [NotNullWhen(true)] out string? value)
     {
         value = null;
 
