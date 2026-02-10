@@ -27,6 +27,8 @@ internal sealed class JitDiffJob : JobBase
 
         await RunProcessAsync("apt-get", "update");
 
+        int failedBuilds = 0;
+
         while (true)
         {
             await WaitForPendingTasksAsync();
@@ -37,7 +39,26 @@ internal sealed class JitDiffJob : JobBase
             {
                 DeleteBuildArtifactsForMain();
 
-                await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
+                try
+                {
+                    await BuildAndCopyRuntimeBranchBitsAsync(this, "main");
+                    failedBuilds = 0;
+                }
+                catch when (failedBuilds <= 10)
+                {
+                    failedBuilds++;
+
+                    await LogAsync("Build failed. Retrying ...");
+                    await Task.Delay(TimeSpan.FromMinutes(1) * Math.Pow(2, failedBuilds));
+
+                    if (await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false) != 0)
+                    {
+                        await Task.Delay(10_000);
+                        await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false);
+                    }
+
+                    continue;
+                }
 
                 await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
 
