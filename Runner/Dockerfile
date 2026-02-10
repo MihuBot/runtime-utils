@@ -11,7 +11,7 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0
 WORKDIR /app
 COPY --from=build /app/out .
 
-RUN apt-get update && apt-get install -y dotnet-sdk-8.0 ninja-build
+RUN apt-get update && apt-get install -y dotnet-sdk-8.0
 
 WORKDIR /runner
 VOLUME /runner

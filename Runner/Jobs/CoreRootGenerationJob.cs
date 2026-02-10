@@ -40,7 +40,7 @@ internal sealed class CoreRootGenerationJob : JobBase
     {
         Task cloneRuntimeTask = RuntimeHelpers.CloneRuntimeMainAsync(this);
 
-        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full", logPrefix: "Install tools");
+        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full ninja-build", logPrefix: "Install tools");
 
         await aptGetTask;
         await cloneRuntimeTask;

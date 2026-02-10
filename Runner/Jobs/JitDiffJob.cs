@@ -135,7 +135,7 @@ internal sealed class JitDiffJob : JobBase
     {
         Task cloneRuntimeTask = RuntimeHelpers.CloneRuntimeAsync(job);
 
-        Task setupZipAndWgetTask = job.RunProcessAsync("apt-get", "install -y zip wget", logPrefix: "Setup zip & wget");
+        Task setupZipAndWgetTask = job.RunProcessAsync("apt-get", "install -y zip wget ninja-build", logPrefix: "Setup zip & wget");
 
         Task setupJitutilsTask = Task.Run(async () =>
         {

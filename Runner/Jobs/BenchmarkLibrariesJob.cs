@@ -169,7 +169,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             }
         });
 
-        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full", logPrefix: "Install tools");
+        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full ninja-build", logPrefix: "Install tools");
 
         Directory.CreateDirectory("artifacts-main");
         Directory.CreateDirectory("artifacts-pr");
