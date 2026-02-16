@@ -30,8 +30,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         {
             await clonePerformanceTask;
 
-            PendingTasks.Enqueue(DotnetHelpers.InstallDotnetSdkAsync(this, "performance/global.json"));
-
             coreRuns = await DownloadCoreRootsAsync(entries);
         }
         else
@@ -63,10 +61,11 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
             }
 
-            await DotnetHelpers.InstallDotnetSdkAsync(this, "performance/global.json");
-
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
         }
+
+        await DotnetHelpers.InstallDotnetDailySdkAsync(this, GetPerformanceDotnetVersion());
+        await DotnetHelpers.PatchVersionInGlobalJson(this, "performance/global.json", await DotnetHelpers.GetInstalledDotnetSdkVersionAsync(this));
 
         await WaitForPendingTasksAsync();
 
@@ -80,9 +79,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             (string repo, string branch) = GetDotnetPerformanceRepoSource();
 
             await RunProcessAsync("git", $"clone --no-tags --depth=1 -b {branch} --progress https://github.com/{repo} performance", logPrefix: "Clone performance");
-
-            // Performance's global.json is out of date
-            await File.WriteAllBytesAsync("performance/global.json", await HttpClient.GetByteArrayAsync("https://raw.githubusercontent.com/dotnet/runtime/refs/heads/main/global.json"));
 
             if (TryGetFlag("medium") || TryGetFlag("long"))
             {
@@ -194,6 +190,23 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
             return ("dotnet/performance", "main");
         }
+    }
+
+    private static int GetPerformanceDotnetVersion()
+    {
+        string source = File.ReadAllText("performance/src/benchmarks/micro/MicroBenchmarks.csproj");
+        // <SupportedTargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0;net11.0</SupportedTargetFrameworks>
+
+        Match match = DotnetVersionFromCsprojRegex().Match(source);
+
+        if (!match.Success)
+        {
+            throw new Exception("Failed to determine the dotnet version from MicroBenchmarks.csproj");
+        }
+
+        // ["net6.0", "net7.0", ...]
+        string[] frameworks = match.Groups[1].Value.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        return frameworks.Max(f => int.Parse(f.AsSpan(3, f.IndexOf('.') - 3)));
     }
 
     private async Task<string[]> DownloadCoreRootsAsync(CoreRootAPI.CoreRootEntry[] entries)
@@ -387,4 +400,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
     [GeneratedRegex(@"BenchmarkDotNet\.(\d.*?)\.nupkg")]
     private static partial Regex BenchmarkDotNetPackageVersionRegex();
+
+    [GeneratedRegex(@"Frameworks>((?:net\d+\.\d+);?)+<\/")]
+    private static partial Regex DotnetVersionFromCsprojRegex();
 }

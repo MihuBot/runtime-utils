@@ -1,7 +1,13 @@
-﻿namespace Runner.Helpers;
+﻿using System.Text.Json.Nodes;
+
+namespace Runner.Helpers;
 
 internal static class DotnetHelpers
 {
+    public static string DefaultInstallPath => OperatingSystem.IsLinux()
+        ? "/usr/lib/dotnet"
+        : throw new NotImplementedException();
+
     public static async Task KillRemainingDotnetProcessesAsync(JobBase job)
     {
         foreach (Process proc in Process.GetProcesses())
@@ -53,9 +59,18 @@ internal static class DotnetHelpers
     public static async Task InstallDotnetDailySdkAsync(JobBase job, int version, string? installDir = null) =>
         await InstallDotnetSdkAsyncCore(job, $"--channel {version}.0 --quality daily", installDir);
 
+    public static async Task<string> GetInstalledDotnetSdkVersionAsync(JobBase job, string? installDir = null)
+    {
+        installDir ??= DefaultInstallPath;
+
+        List<string> output = [];
+        await job.RunProcessAsync($"{installDir}/dotnet", "--version", output, logPrefix: "SDK version");
+        return output.Last().Trim();
+    }
+
     private static async Task InstallDotnetSdkAsyncCore(JobBase job, string versionArgs, string? installDir = null)
     {
-        installDir ??= "/usr/lib/dotnet";
+        installDir ??= DefaultInstallPath;
 
         if (!File.Exists("dotnet-install.sh"))
         {
@@ -63,5 +78,22 @@ internal static class DotnetHelpers
         }
 
         await job.RunProcessAsync("bash", $"dotnet-install.sh {versionArgs} --install-dir {installDir}");
+    }
+
+    public static async Task PatchVersionInGlobalJson(JobBase job, string globalJsonPath, string newVersion)
+    {
+        var json = JsonNode.Parse(File.ReadAllText(globalJsonPath))!;
+
+        if (json["sdk"] is { } sdkNode)
+        {
+            sdkNode["version"] = newVersion;
+        }
+
+        if (json["tools"] is { } toolsNode)
+        {
+            toolsNode["dotnet"] = newVersion;
+        }
+
+        File.WriteAllText(globalJsonPath, json.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 }
