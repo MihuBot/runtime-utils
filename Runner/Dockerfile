@@ -13,7 +13,10 @@ COPY --from=build /app/out .
 
 RUN apt-get update && apt-get install -y dotnet-sdk-8.0
 
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
 WORKDIR /runner
 VOLUME /runner
 
-ENTRYPOINT ["dotnet", "/app/Runner.dll"]
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -1,0 +1,12 @@
+services:
+  runner:
+    image: mihazupan/runtime-utils:runner
+    container_name: runtime-utils-runner
+    pull_policy: always
+    restart: always
+    volumes:
+      - ./runner:/runner
+    environment:
+      - JOB_TYPE=JitDiffJob
+      - RUNNER_ID=RunnerName
+      - RUNNER_TOKEN=foo
