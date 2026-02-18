@@ -1,7 +1,5 @@
 ﻿using System.Text.Json.Nodes;
 
-namespace Runner.Helpers;
-
 internal static class DotnetHelpers
 {
     public static string DefaultInstallPath => OperatingSystem.IsLinux()
