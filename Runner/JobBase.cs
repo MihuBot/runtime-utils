@@ -144,6 +144,9 @@ public abstract class JobBase
 
     public virtual Task RunPreparedRunnerAsync() => throw new NotImplementedException();
 
+    public virtual (string JobType, string Os, string Architecture, string BaseRepo, string BaseBranch) GetPreparedRunnerCapabilities()
+        => (GetType().Name, Os, Arch, Metadata.GetValueOrDefault(nameof(BaseRepo), ""), Metadata.GetValueOrDefault(nameof(BaseBranch), ""));
+
     protected abstract Task RunJobCoreAsync();
 
     public async Task RunJobAsync()
@@ -811,7 +814,15 @@ public abstract class JobBase
 
         await LogAsync($"Announcing prepared runner '{_preparedRunnerId}' ...");
 
-        var request = new HttpRequestMessage(HttpMethod.Get, $"Jobs/AnnounceRunner?jobType={GetType().Name}&runnerId={Uri.EscapeDataString(_preparedRunnerId)}");
+        var (jobType, os, architecture, baseRepo, baseBranch) = GetPreparedRunnerCapabilities();
+
+        var request = new HttpRequestMessage(HttpMethod.Get,
+            $"Jobs/AnnounceRunner?jobType={Uri.EscapeDataString(jobType)}" +
+            $"&runnerId={Uri.EscapeDataString(_preparedRunnerId)}" +
+            $"&os={Uri.EscapeDataString(os)}" +
+            $"&architecture={Uri.EscapeDataString(architecture)}" +
+            $"&baseRepo={Uri.EscapeDataString(baseRepo)}" +
+            $"&baseBranch={Uri.EscapeDataString(baseBranch)}");
         request.Headers.Add("X-Runner-Announce-Token", _preparedRunnerToken);
 
         try

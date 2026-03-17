@@ -87,6 +87,7 @@ static async Task RunAsync(string[] args)
         JobBase job = jobType switch
         {
             nameof(JitDiffJob) => new JitDiffJob(client, runnerId, runnerToken),
+            nameof(RegexDiffJob) => new RegexDiffJob(client, runnerId, runnerToken),
             var type => throw new NotSupportedException(type),
         };
 

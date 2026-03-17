@@ -18,29 +18,102 @@ internal sealed class RegexDiffJob : JobBase
         IncludeFields = true
     };
 
+    private string _lastBuiltMainCommit = "none";
+    private KnownPattern[]? _cachedKnownPatterns;
+    private Dictionary<KnownPattern, string>? _mainSources;
+
     public RegexDiffJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
+    public RegexDiffJob(HttpClient client, string runnerId, string runnerToken) : base(client, runnerId, runnerToken) { }
+
+    public override async Task RunPreparedRunnerAsync()
+    {
+        Metadata[nameof(BaseRepo)] = Metadata[nameof(PrRepo)] = "dotnet/runtime";
+        Metadata[nameof(BaseBranch)] = Metadata[nameof(PrBranch)] = "main";
+
+        await RunProcessAsync("apt-get", "update");
+
+        int failedBuilds = 0;
+
+        while (true)
+        {
+            await WaitForPendingTasksAsync();
+
+            await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
+
+            if (await GitHelper.GetCurrentCommitAsync(this, "runtime") != _lastBuiltMainCommit)
+            {
+                try
+                {
+                    await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: true);
+                    failedBuilds = 0;
+                }
+                catch when (failedBuilds <= 10)
+                {
+                    failedBuilds++;
+
+                    await LogAsync("Build failed. Retrying ...");
+                    await Task.Delay(TimeSpan.FromMinutes(1) * Math.Pow(2, failedBuilds));
+
+                    if (await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false) != 0)
+                    {
+                        await Task.Delay(10_000);
+                        await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false);
+                    }
+
+                    continue;
+                }
+
+                await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+
+                _lastBuiltMainCommit = await GitHelper.GetCurrentCommitAsync(this, "runtime");
+
+                _cachedKnownPatterns ??= await DownloadKnownPatternsAsync();
+                _mainSources = await RunSourceGeneratorOnKnownPatternsAsync("main");
+            }
+
+            await WaitForPendingTasksAsync();
+
+            Stopwatch timeSinceLastBuild = Stopwatch.StartNew();
+
+            while (timeSinceLastBuild.Elapsed.TotalMinutes < 30)
+            {
+                if (await TryAnnounceAndSwitchToLiveJobAsync())
+                {
+                    return;
+                }
+            }
+        }
+    }
 
     protected override async Task RunJobCoreAsync()
     {
-        bool skipJitDiff = TryGetFlag("SkipJitDiff");
+        bool runJitDiff = TryGetFlag("JitDiff");
 
-        await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
+        if (!UsingPreparedRunner)
+        {
+            await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
+        }
 
-        KnownPattern[] knownPatterns = await DownloadKnownPatternsAsync();
+        KnownPattern[] knownPatterns = _cachedKnownPatterns ?? await DownloadKnownPatternsAsync();
 
         await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: !skipJitDiff);
+        bool mainAlreadyBuilt = await GitHelper.GetCurrentCommitAsync(this, "runtime") == _lastBuiltMainCommit;
 
-        var mainSources = await RunSourceGeneratorOnKnownPatternsAsync("main");
+        if (!mainAlreadyBuilt)
+        {
+            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: runJitDiff);
+
+            _mainSources = await RunSourceGeneratorOnKnownPatternsAsync("main");
+        }
 
         await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: !skipJitDiff);
+        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: runJitDiff);
 
         var prSources = await RunSourceGeneratorOnKnownPatternsAsync("pr");
 
-        var entries = await CreateRegexEntriesAsync(mainSources, prSources);
+        var entries = await CreateRegexEntriesAsync(_mainSources!, prSources);
 
         await DiffRegexSourcesAsync(entries);
 
@@ -48,9 +121,12 @@ internal sealed class RegexDiffJob : JobBase
 
         await UploadSourceGeneratorResultsAsync(entries);
 
-        if (!skipJitDiff)
+        if (runJitDiff)
         {
-            await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+            if (!UsingPreparedRunner)
+            {
+                await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+            }
 
             await RunJitDiffAsync(knownPatterns, entries);
         }
@@ -75,8 +151,8 @@ internal sealed class RegexDiffJob : JobBase
 
         // 'Compiled' doesn't matter for the source generator.
         knownPatterns = knownPatterns
-            .Select(pattern => new KnownPattern(pattern.Pattern, pattern.Options & ~RegexOptions.Compiled, pattern.Count))
-            .Distinct()
+            .GroupBy(pattern => new KnownPattern(pattern.Pattern, pattern.Options & ~RegexOptions.Compiled, pattern.Count))
+            .Select(g => new KnownPattern(g.Key.Pattern, g.Key.Options, g.Sum(p => p.Count)))
             .ToArray();
 
         await LogAsync($"Using {knownPatterns.Length} distinct patterns after removing 'RegexOptions.Compiled'");
