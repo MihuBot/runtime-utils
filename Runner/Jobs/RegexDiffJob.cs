@@ -172,7 +172,7 @@ internal sealed class RegexDiffJob : JobBase
     {
         await LogAsync($"Generating {branch} Regex sources ...");
 
-        const string TestFilePath = "runtime/src/libraries/System.Text.RegularExpressions/tests/FunctionalTests/RegexGeneratorParserTests.cs";
+        const string TestFilePath = "src/libraries/System.Text.RegularExpressions/tests/FunctionalTests/RegexGeneratorParserTests.cs";
 
         string resultsPath = Path.GetFullPath($"results-{branch}.json");
 
@@ -235,16 +235,17 @@ internal sealed class RegexDiffJob : JobBase
         patchSource = string.Join('\n', patchSource.ReplaceLineEndings("\n").Split('\n').Select(l => $"    {l}"));
 
         await LogAsync($"Injecting test source patch:\n{TestFilePath}\n{patchSource}");
-        string testSource = File.ReadAllText(TestFilePath);
+        string testSource = File.ReadAllText($"runtime/{TestFilePath}");
         int offset = testSource.IndexOf('{') + 1;
         testSource = $"{testSource.AsSpan(0, offset)}\n{patchSource}{testSource.AsSpan(offset)}";
-        File.WriteAllText(TestFilePath, testSource);
-        await RunProcessAsync("git", "commit -am \"Patch test sources\"", workDir: "runtime");
+        File.WriteAllText($"runtime/{TestFilePath}", testSource);
 
         const string RegexTestsPath = "src/libraries/System.Text.RegularExpressions/tests/FunctionalTests";
         const string XUnitMethodName = "System.Text.RegularExpressions.Tests.InjectedGenerateAllSourcesTestClass.GenerateAllSourcesAsync";
         await RunProcessAsync("runtime/.dotnet/dotnet", $"build {RegexTestsPath} /t:Test -c Release /p:XUnitMethodName={XUnitMethodName}",
             logPrefix: $"Generating sources for {branch}", workDir: "runtime");
+
+        await RunProcessAsync("git", $"checkout {TestFilePath}", workDir: "runtime");
 
         EntryWithGeneratedSource[] generatedSources = JsonSerializer.Deserialize<EntryWithGeneratedSource[]>(File.ReadAllText(resultsPath), s_jsonOptions)!;
 
