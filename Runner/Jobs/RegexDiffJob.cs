@@ -242,7 +242,7 @@ internal sealed class RegexDiffJob : JobBase
 
         const string RegexTestsPath = "src/libraries/System.Text.RegularExpressions/tests/FunctionalTests";
         const string XUnitMethodName = "System.Text.RegularExpressions.Tests.InjectedGenerateAllSourcesTestClass.GenerateAllSourcesAsync";
-        await RunProcessAsync("runtime/.dotnet/dotnet", $"build {RegexTestsPath} /t:Test -c Release /p:XUnitMethodName={XUnitMethodName}",
+        await RunProcessAsync("bash", $"dotnet.sh build {RegexTestsPath} /t:Test -c Release /p:XUnitMethodName={XUnitMethodName}",
             logPrefix: $"Generating sources for {branch}", workDir: "runtime");
 
         await RunProcessAsync("git", $"checkout {TestFilePath}", workDir: "runtime");
@@ -682,7 +682,7 @@ internal sealed class RegexDiffJob : JobBase
                     await ZipAndUploadArtifactAsync($"Project{suffix}_{idString}", directory);
                 }
 
-                await RunProcessAsync("runtime/.dotnet/dotnet", "publish -o artifacts", workDir: directory);
+                await RunProcessAsync("bash", "dotnet.sh publish -o artifacts", workDir: directory);
 
                 string artifactsPath = $"{directory}/artifacts";
 
