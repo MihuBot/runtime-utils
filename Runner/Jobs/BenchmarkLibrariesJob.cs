@@ -94,7 +94,9 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                     string jobType = $"Job.{(TryGetFlag("medium") ? "Medium" : "Long")}Run";
 
                     string source = File.ReadAllText(path);
-                    string newSource = RecommendedConfigJobTypeRegex().Replace(source, $"job = {jobType};");
+
+                    // https://github.com/dotnet/performance/blob/d76d845972c2a231f31e88802457d8aaf7263a5b/src/harness/BenchmarkDotNet.Extensions/RecommendedConfig.cs#L53
+                    string newSource = source.Replace(".AddJob(job", $".AddJob((job.ToString().Length >= 0 ? {jobType} : job)", StringComparison.Ordinal);
 
                     if (source == newSource)
                     {
@@ -387,10 +389,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     // We want '+|H' to replace it with '+\|H'
     [GeneratedRegex(@"([^ \n:\\])\|([^ \n:])")]
     private static partial Regex PipeCharInTableCellRegex();
-
-    // Matches https://github.com/dotnet/performance/blob/d0d7ea34e98ca19f8264a17abe05ef6f73e888ba/src/harness/BenchmarkDotNet.Extensions/RecommendedConfig.cs#L33-L38
-    [GeneratedRegex(@"job = Job\..*?;", RegexOptions.Singleline)]
-    private static partial Regex RecommendedConfigJobTypeRegex();
 
     [GeneratedRegex("/cr-[0-9]+-([a-f0-9]{40})/corerun")]
     private static partial Regex CommitCoreRunReplacementRegex();
