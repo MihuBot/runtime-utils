@@ -199,15 +199,15 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         string source = File.ReadAllText("performance/src/benchmarks/micro/MicroBenchmarks.csproj");
         // <SupportedTargetFrameworks>net6.0;net7.0;net8.0;net9.0;net10.0;net11.0</SupportedTargetFrameworks>
 
-        Match match = DotnetVersionFromCsprojRegex().Match(source);
+        MatchCollection matches = DotnetVersionFromCsprojRegex().Matches(source);
 
-        if (!match.Success)
+        if (matches.Count == 0)
         {
             throw new Exception("Failed to determine the dotnet version from MicroBenchmarks.csproj");
         }
 
         // ["net6.0", "net7.0", ...]
-        string[] frameworks = match.Groups[1].Value.Split(';', StringSplitOptions.RemoveEmptyEntries);
+        string[] frameworks = matches.Select(m => m.Groups[1].Value).ToArray();
         return frameworks.Max(f => int.Parse(f.AsSpan(3, f.IndexOf('.') - 3)));
     }
 
@@ -399,6 +399,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     [GeneratedRegex(@"BenchmarkDotNet\.(\d.*?)\.nupkg")]
     private static partial Regex BenchmarkDotNetPackageVersionRegex();
 
-    [GeneratedRegex(@"Frameworks>((?:net\d+\.\d+);?)+<\/")]
+    [GeneratedRegex(@"((?:net\d+\.\d+);?)+<\/")]
     private static partial Regex DotnetVersionFromCsprojRegex();
 }
