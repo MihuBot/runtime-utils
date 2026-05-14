@@ -163,7 +163,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
                             try
                             {
-                                await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath]);
+                                await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id);
                             }
                             catch
                             {

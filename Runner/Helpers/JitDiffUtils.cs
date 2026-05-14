@@ -9,14 +9,14 @@ internal static partial class JitDiffUtils
         await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, "--frameworks");
     }
 
-    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths)
+    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null)
     {
         ArgumentOutOfRangeException.ThrowIfZero(assemblyPaths.Length);
 
-        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")));
+        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix);
     }
 
-    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly)
+    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null)
     {
         bool useCctors = !job.TryGetFlag("nocctors");
         bool useTier0 = job.TryGetFlag("tier0");
@@ -42,7 +42,7 @@ internal static partial class JitDiffUtils
             $"{frameworksOrAssembly} --pmi " +
             $"--core_root {coreRootFolder} " +
             $"--base {checkedClrFolder}",
-            logPrefix: $"jit-diff {coreRootFolder}",
+            logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
             envVars: envVars);
     }
 
