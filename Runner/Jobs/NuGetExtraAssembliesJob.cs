@@ -41,7 +41,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         await ProcessApprovedPackagesAsync(approvedPackages);
 
-        await ZipAndUploadArtifactAsync(OutputDir, OutputDir);
+        await ZipAndUploadArtifactAsync(OutputDir, OutputDir, maxCompression: true);
     }
 
     private async Task BuildRuntimeAsync()
