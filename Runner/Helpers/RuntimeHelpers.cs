@@ -205,6 +205,40 @@ internal static class RuntimeHelpers
         await DotnetHelpers.InstallDotnetSdkAsync(job, "runtime/global.json", installDir);
     }
 
+    public static async Task CopyAspNetSharedFrameworkToCoreRootAsync(JobBase job, string coreRootFolder)
+    {
+        string sharedDir = Path.Combine(DotnetHelpers.DefaultInstallPath, "shared", "Microsoft.AspNetCore.App");
+
+        if (!Directory.Exists(sharedDir))
+        {
+            await job.LogAsync("ASP.NET shared framework not found, skipping");
+            return;
+        }
+
+        string? latestVersion = Directory.GetDirectories(sharedDir)
+            .Select(Path.GetFileName)
+            .OrderByDescending(v => v)
+            .FirstOrDefault();
+
+        if (latestVersion is null)
+            return;
+
+        string aspnetDir = Path.Combine(sharedDir, latestVersion);
+        int copied = 0;
+
+        foreach (string dll in Directory.GetFiles(aspnetDir, "*.dll"))
+        {
+            string dest = Path.Combine(coreRootFolder, Path.GetFileName(dll));
+            if (!File.Exists(dest))
+            {
+                File.Copy(dll, dest);
+                copied++;
+            }
+        }
+
+        await job.LogAsync($"Copied {copied} ASP.NET shared framework DLLs from {latestVersion} to {coreRootFolder}");
+    }
+
     public static async Task CopyReleaseArtifactsAsync(JobBase job, string logPrefix, string destination, string runtimeConfig = "Release")
     {
         AssertIsLinux();

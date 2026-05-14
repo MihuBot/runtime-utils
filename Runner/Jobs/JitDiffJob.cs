@@ -121,6 +121,10 @@ internal sealed class JitDiffJob : JobBase
             await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
         }
 
+        await Task.WhenAll(
+            RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main"),
+            RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-pr"));
+
         await downloadExtraAssemblies;
 
         string diffAnalyzeSummary = await CollectFrameworksDiffsAsync(skipMain: mainAlreadyBuilt);
