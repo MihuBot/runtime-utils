@@ -31,7 +31,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         if (!TryGetArgument("count", out int packageCount) || packageCount <= 0)
         {
-            packageCount = 200;
+            packageCount = 1000;
         }
 
         var runtimeTask = BuildRuntimeAsync();
