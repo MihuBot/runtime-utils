@@ -1,3 +1,4 @@
+using System.Text;
 using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -182,6 +183,15 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
                             // Write DiffAssemblies.txt so JitDiffJob only diffs the main DLL, not dependencies
                             File.WriteAllText(Path.Combine(outputPkgDir, "DiffAssemblies.txt"), pkg.Dll);
+
+                            // Write version.txt with package and dependency versions
+                            var versionLines = new StringBuilder();
+                            versionLines.AppendLine($"{pkg.Id} {pkg.Version}");
+                            foreach (var (depId, depVersion) in pkg.Deps.OrderBy(d => d.Key, StringComparer.OrdinalIgnoreCase))
+                            {
+                                versionLines.AppendLine($"{depId} {depVersion}");
+                            }
+                            File.WriteAllText(Path.Combine(outputPkgDir, "version.txt"), versionLines.ToString());
 
                             Interlocked.Increment(ref included);
                             await LogAsync($"[NuGet] {pkg.Id} - included ({pkg.Deps.Count} deps)");
