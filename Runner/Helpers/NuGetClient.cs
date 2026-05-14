@@ -187,11 +187,22 @@ internal sealed class NuGetClient
             {
                 string expectedDll = $"{id}.dll";
 
-                var tfmGroups = archive.Entries
+                var allDllEntries = archive.Entries
                     .Select(e => (Entry: e, Parts: e.FullName.Split('/')))
                     .Where(x => x.Parts.Length == 3 &&
                                 x.Parts[0].Equals("lib", StringComparison.OrdinalIgnoreCase) &&
-                                x.Parts[2].Equals(expectedDll, StringComparison.OrdinalIgnoreCase))
+                                x.Parts[2].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                // Prefer the DLL matching the package name, fall back if there's exactly one DLL
+                var matchingEntries = allDllEntries
+                    .Where(x => x.Parts[2].Equals(expectedDll, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                if (matchingEntries.Count == 0 && allDllEntries.Count == 1)
+                    matchingEntries = allDllEntries;
+
+                var tfmGroups = matchingEntries
                     .GroupBy(x => x.Parts[1])
                     .OrderByDescending(g => GetTfmPriority(g.Key))
                     .ToList();
