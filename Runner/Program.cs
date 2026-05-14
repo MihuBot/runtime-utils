@@ -71,6 +71,7 @@ static async Task RunAsync(string[] args)
             nameof(RegexDiffJob) => new RegexDiffJob(client, metadata),
             nameof(BackportJob) => new BackportJob(client, metadata),
             nameof(CoreRootGenerationJob) => new CoreRootGenerationJob(client, metadata),
+            nameof(NuGetExtraAssembliesJob) => new NuGetExtraAssembliesJob(client, metadata),
             var type => throw new NotSupportedException(type),
         };
 

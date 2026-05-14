@@ -1,6 +1,4 @@
-﻿using Azure.Storage.Blobs;
-using Azure.Storage.Blobs.Models;
-using System.IO.Compression;
+﻿using System.IO.Compression;
 
 namespace Runner.Jobs;
 
@@ -289,59 +287,32 @@ internal sealed class JitDiffJob : JobBase
     {
         try
         {
-            if (!Metadata.TryGetValue("JitDiffExtraAssembliesSasUri", out string? uri) ||
-                !TryGetFlag("nuget"))
+            if (!TryGetFlag("nuget") ||
+                !Metadata.TryGetValue("JitDiffExtraAssembliesUrl", out string? url))
             {
                 return;
             }
 
-            var container = new BlobContainerClient(new Uri(uri));
+            await LogAsync("[Extra assemblies] Downloading archive ...");
 
-            await foreach (BlobItem blob in container.GetBlobsAsync(cancellationToken: JobTimeout))
+            using var tempZip = new TempFile("zip");
+
+            using (var response = await HttpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, JobTimeout))
             {
-                string fileName = Path.GetFileName(blob.Name);
-                string projectName = Path.GetFileNameWithoutExtension(fileName);
+                response.EnsureSuccessStatusCode();
 
-                if (ShouldSkip(fileName))
-                {
-                    await LogAsync($"[Extra assemblies] Skipping {fileName}");
-                    continue;
-                }
-
-                string projectDirectory = Path.Combine(ExtraProjectsDirectory, projectName);
-                Directory.CreateDirectory(projectDirectory);
-
-                var blobClient = container.GetBlobClient(blob.Name);
-
-                if (fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                {
-                    await blobClient.DownloadToAsync(Path.Combine(projectDirectory, fileName), JobTimeout);
-                }
-                else
-                {
-                    using var zipFile = new TempFile("zip");
-                    await blobClient.DownloadToAsync(zipFile.Path, JobTimeout);
-
-                    using var archive = ZipFile.OpenRead(zipFile.Path);
-                    archive.ExtractToDirectory(projectDirectory);
-                }
-
-                await LogAsync($"[Extra assemblies] Downloaded {fileName}");
+                using var fs = File.Create(tempZip.Path);
+                await response.Content.CopyToAsync(fs, JobTimeout);
             }
+
+            ZipFile.ExtractToDirectory(tempZip.Path, ExtraProjectsDirectory);
+
+            int count = Directory.GetDirectories(ExtraProjectsDirectory).Length;
+            await LogAsync($"[Extra assemblies] Extracted {count} packages");
         }
         catch (Exception ex)
         {
             await LogAsync($"Failed to download extra test assemblies: {ex}");
-        }
-
-        static bool ShouldSkip(string fileName)
-        {
-            if (fileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
-            {
-                return IsArm;
-            }
-
-            return !fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
         }
     }
 
