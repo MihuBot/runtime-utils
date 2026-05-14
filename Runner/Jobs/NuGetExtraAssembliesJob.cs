@@ -49,6 +49,42 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
         await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
         await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
+        await CopyAspNetSharedFrameworkToCoreRootAsync();
+    }
+
+    private async Task CopyAspNetSharedFrameworkToCoreRootAsync()
+    {
+        string sharedDir = Path.Combine(DotnetHelpers.DefaultInstallPath, "shared", "Microsoft.AspNetCore.App");
+
+        if (!Directory.Exists(sharedDir))
+        {
+            await LogAsync("ASP.NET shared framework not found, skipping");
+            return;
+        }
+
+        // Pick the latest installed version
+        string? latestVersion = Directory.GetDirectories(sharedDir)
+            .Select(Path.GetFileName)
+            .OrderByDescending(v => v)
+            .FirstOrDefault();
+
+        if (latestVersion is null)
+            return;
+
+        string aspnetDir = Path.Combine(sharedDir, latestVersion);
+        int copied = 0;
+
+        foreach (string dll in Directory.GetFiles(aspnetDir, "*.dll"))
+        {
+            string dest = Path.Combine("artifacts-main", Path.GetFileName(dll));
+            if (!File.Exists(dest))
+            {
+                File.Copy(dll, dest);
+                copied++;
+            }
+        }
+
+        await LogAsync($"Copied {copied} ASP.NET shared framework DLLs from {latestVersion} to core_root");
     }
 
     private async Task<List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)>> GatherNuGetInfoAsync(int count)
