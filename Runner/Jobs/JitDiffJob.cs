@@ -121,10 +121,6 @@ internal sealed class JitDiffJob : JobBase
             await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
         }
 
-        await Task.WhenAll(
-            RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main"),
-            RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-pr"));
-
         await downloadExtraAssemblies;
 
         string diffAnalyzeSummary = await CollectFrameworksDiffsAsync(skipMain: mainAlreadyBuilt);
@@ -329,6 +325,10 @@ internal sealed class JitDiffJob : JobBase
                 JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
 
             await Task.WhenAll(
+                RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main"),
+                RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-pr"));
+
+            await Task.WhenAll(
                 DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory),
                 DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
         }
@@ -349,7 +349,16 @@ internal sealed class JitDiffJob : JobBase
 
         async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder)
         {
-            var projectDirs = new Queue<string>(Directory.GetDirectories(ExtraProjectsDirectory));
+            string projectsRoot = ExtraProjectsDirectory;
+
+            // Handle archives with an extra wrapper subdirectory
+            string[] topDirs = Directory.GetDirectories(projectsRoot);
+            if (topDirs.Length == 1 && Directory.GetFiles(projectsRoot).Length == 0)
+            {
+                projectsRoot = topDirs[0];
+            }
+
+            var projectDirs = new Queue<string>(Directory.GetDirectories(projectsRoot));
             if (projectDirs.Count == 0)
             {
                 return;
