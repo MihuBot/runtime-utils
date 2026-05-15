@@ -120,7 +120,8 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         string diffOutputDir = "nuget-diff-temp";
         Directory.CreateDirectory(diffOutputDir);
 
-        int parallelism = Math.Min(Math.Min(Environment.ProcessorCount, GetRemainingSystemMemoryGB() / 3), approvedPackages.Count);
+        int memoryParallelism = OnRamDisk ? GetRemainingSystemMemoryGB() / 3 : GetRemainingSystemMemoryGB() * 2;
+        int parallelism = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), approvedPackages.Count);
         parallelism = Math.Max(parallelism, 1);
         var packageQueue = new Queue<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)>(approvedPackages);
 

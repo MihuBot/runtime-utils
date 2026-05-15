@@ -615,6 +615,8 @@ public abstract class JobBase
         return (int)(memory.AvailablePhysical / 1024 / 1024 / 1024);
     }
 
+    protected static bool OnRamDisk => Environment.CurrentDirectory.StartsWith("/ramdisk", StringComparison.Ordinal);
+
     protected async Task ChangeWorkingDirectoryToRamOrFastestDiskAsync(bool allowRamDisk = true)
     {
         string? newLocation = await ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore(allowRamDisk);
