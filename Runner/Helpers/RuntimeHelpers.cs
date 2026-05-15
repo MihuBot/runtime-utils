@@ -217,7 +217,7 @@ internal static class RuntimeHelpers
 
         string? latestVersion = Directory.GetDirectories(sharedDir)
             .Select(Path.GetFileName)
-            .OrderByDescending(v => v)
+            .OrderByDescending(v => Version.TryParse(v, out var ver) ? ver : new Version())
             .FirstOrDefault();
 
         if (latestVersion is null)
