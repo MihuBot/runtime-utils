@@ -165,7 +165,10 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
                             try
                             {
-                                await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id);
+                                for (int i = 0; i < 3; i++)
+                                {
+                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id);
+                                }
                             }
                             catch
                             {
