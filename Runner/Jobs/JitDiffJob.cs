@@ -350,6 +350,7 @@ internal sealed class JitDiffJob : JobBase
         async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder)
         {
             string projectsRoot = ExtraProjectsDirectory;
+            string branch = coreRootFolder.Contains("main", StringComparison.Ordinal) ? "main" : "pr";
 
             // Handle archives with an extra wrapper subdirectory
             string[] topDirs = Directory.GetDirectories(projectsRoot);
@@ -411,7 +412,7 @@ internal sealed class JitDiffJob : JobBase
 
                     try
                     {
-                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, newCheckedClrFolder, outputFolder, assemblyPaths);
+                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, newCheckedClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {Path.GetFileName(projectDir)}");
                     }
                     catch (Exception ex)
                     {
