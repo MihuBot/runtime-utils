@@ -433,7 +433,7 @@ internal sealed class NuGetClient
     /// Resolves all transitive dependencies of a package for the given TFM.
     /// Returns null if any dependency has a non-permissive license.
     /// </summary>
-    public async Task<Dictionary<string, string>?> ResolveAllDependenciesAsync(string rootId, string rootVersion, string targetTfm)
+    public async Task<Dictionary<string, string>?> ResolveAllDependenciesAsync(string rootId, string rootVersion, string targetTfm, bool skipLicenseCheck = false)
     {
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootId };
@@ -451,9 +451,12 @@ internal sealed class NuGetClient
             string? version = await ResolveLatestVersionAsync(depId);
             if (version is null) continue;
 
-            string? license = await GetLicenseExpressionAsync(depId, version);
-            if (!IsPermissiveLicense(license))
-                return null;
+            if (!skipLicenseCheck)
+            {
+                string? license = await GetLicenseExpressionAsync(depId, version);
+                if (!IsPermissiveLicense(license))
+                    return null;
+            }
 
             resolved[depId] = version;
 

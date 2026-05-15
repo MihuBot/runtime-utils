@@ -12,6 +12,13 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
     public NuGetExtraAssembliesJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
+    private static HashSet<string> ExtraPackages { get; } = new(
+        [
+            "SixLabors.ImageSharp", "SixLabors.Fonts", "SixLabors.ImageSharp.Drawing",
+            "dnlib", "AsmResolver", "BepuPhysics",
+        ],
+        StringComparer.OrdinalIgnoreCase);
+
     protected override async Task RunJobCoreAsync()
     {
         await ChangeWorkingDirectoryToRamOrFastestDiskAsync();
@@ -58,6 +65,21 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         var packages = await _nuget.SearchTopPackagesAsync(count);
         await LogAsync($"Found {packages.Count} packages to evaluate");
 
+        // Merge in ExtraPackages, resolving their latest versions and deduplicating
+        var existingIds = new HashSet<string>(packages.Select(p => p.Id), StringComparer.OrdinalIgnoreCase);
+        foreach (string extraId in ExtraPackages)
+        {
+            if (!existingIds.Add(extraId))
+                continue;
+
+            string? version = await _nuget.ResolveLatestVersionAsync(extraId);
+            if (version is not null)
+            {
+                packages.Add((extraId, version));
+                await LogAsync($"Added extra package {extraId} {version}");
+            }
+        }
+
         int skippedLicense = 0, skippedNoDlls = 0;
 
         string packagesDir = "nuget-packages-temp";
@@ -71,12 +93,16 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             string prefix = $"[NuGet {i + 1}/{packages.Count}] {id} {version}";
             LastProgressSummary = $"Checking NuGet package {i + 1}/{packages.Count}. Approved {approvedPackages.Count} so far.";
 
-            string? license = await _nuget.GetLicenseExpressionAsync(id, version);
-            if (!NuGetClient.IsPermissiveLicense(license))
+            bool isExtra = ExtraPackages.Contains(id);
+            if (!isExtra)
             {
-                await LogAsync($"{prefix} - skipped (license: {license ?? "none"})");
-                skippedLicense++;
-                continue;
+                string? license = await _nuget.GetLicenseExpressionAsync(id, version);
+                if (!NuGetClient.IsPermissiveLicense(license))
+                {
+                    await LogAsync($"{prefix} - skipped (license: {license ?? "none"})");
+                    skippedLicense++;
+                    continue;
+                }
             }
 
             string pkgDir = Path.Combine(packagesDir, id);
@@ -91,7 +117,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 continue;
             }
 
-            var deps = await _nuget.ResolveAllDependenciesAsync(id, version, selectedTfm);
+            var deps = await _nuget.ResolveAllDependenciesAsync(id, version, selectedTfm, skipLicenseCheck: isExtra);
             if (deps is null)
             {
                 await LogAsync($"{prefix} - skipped (dependency with non-permissive license)");
