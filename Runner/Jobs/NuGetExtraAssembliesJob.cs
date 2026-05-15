@@ -50,6 +50,8 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         await ProcessApprovedPackagesAsync(approvedPackages);
 
         await ZipAndUploadArtifactAsync(OutputDir, OutputDir, maxCompression: true);
+
+        await CreateTopNArchiveAsync(approvedPackages, topN: 50);
     }
 
     private async Task BuildRuntimeAsync()
@@ -294,6 +296,38 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         {
             throw new Exception("No packages were included in the archive.");
         }
+    }
+
+    private async Task CreateTopNArchiveAsync(List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)> approvedPackages, int topN)
+    {
+        var includedIds = new HashSet<string>(
+            Directory.GetDirectories(OutputDir).Select(Path.GetFileName)!,
+            StringComparer.OrdinalIgnoreCase);
+
+        string topNDir = $"{OutputDir}-top{topN}";
+        Directory.CreateDirectory(topNDir);
+
+        int nonExtraCount = 0;
+        foreach (var pkg in approvedPackages)
+        {
+            if (!includedIds.Contains(pkg.Id))
+                continue;
+
+            bool isExtra = ExtraPackages.Contains(pkg.Id);
+            if (!isExtra)
+            {
+                if (nonExtraCount >= topN)
+                    continue;
+                nonExtraCount++;
+            }
+
+            CopyDirectory(Path.Combine(OutputDir, pkg.Id), Path.Combine(topNDir, pkg.Id));
+        }
+
+        int totalCount = Directory.GetDirectories(topNDir).Length;
+        await LogAsync($"Top-{topN} archive: {totalCount} packages ({nonExtraCount} top + {totalCount - nonExtraCount} extra)");
+        await ZipAndUploadArtifactAsync(topNDir, topNDir, maxCompression: true);
+        DeleteDirectory(topNDir);
     }
 
     private static void CopyDirectory(string source, string destination)
