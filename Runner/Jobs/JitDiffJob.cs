@@ -359,7 +359,8 @@ internal sealed class JitDiffJob : JobBase
                 projectsRoot = topDirs[0];
             }
 
-            var projectDirs = new Queue<string>(Directory.GetDirectories(projectsRoot));
+            var projectDirs = new Queue<string>(Directory.GetDirectories(projectsRoot)
+                .OrderByDescending(d => Directory.GetFiles(d, "*.dll").Sum(f => new FileInfo(f).Length)));
             if (projectDirs.Count == 0)
             {
                 return;
