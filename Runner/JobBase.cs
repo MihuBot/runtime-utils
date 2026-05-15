@@ -249,10 +249,8 @@ public abstract class JobBase
         else
         {
             folderPath = Path.GetFullPath(folderPath);
-            string workDir = Path.GetDirectoryName(folderPath) ?? throw new Exception($"No parent folder for '{folderPath}'?");
-            folderPath = Path.GetRelativePath(workDir, folderPath);
 
-            await RunProcessAsync("zip", $"-{(maxCompression ? 6 : 3)} -r {zipFilePath} {folderPath}", logPrefix: zipFileName, workDir: workDir, suppressOutputLogs: true);
+            await RunProcessAsync("zip", $"-{(maxCompression ? 6 : 3)} -r {zipFilePath} .", logPrefix: zipFileName, workDir: folderPath, suppressOutputLogs: true);
         }
 
         await UploadArtifactAsync(zipFilePath);
