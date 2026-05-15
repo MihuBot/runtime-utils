@@ -164,6 +164,25 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             await LogAsync($"Skipped {skippedSystem} packages with DLLs already in core_root");
         }
 
+        // Deduplicate packages that share the same DLL name (e.g. MathNet.Numerics vs MathNet.Numerics.Signed).
+        // The list is ordered by popularity, so the first occurrence wins.
+        var seenDlls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int skippedDuplicateDll = 0;
+        approvedPackages.RemoveAll(p =>
+        {
+            if (!seenDlls.Add(p.Dll))
+            {
+                skippedDuplicateDll++;
+                return true;
+            }
+            return false;
+        });
+
+        if (skippedDuplicateDll > 0)
+        {
+            await LogAsync($"Skipped {skippedDuplicateDll} packages with duplicate DLL names");
+        }
+
         int included = 0, skippedJitDiff = 0;
         string diffOutputDir = "nuget-diff-temp";
         Directory.CreateDirectory(diffOutputDir);
@@ -269,7 +288,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             DeleteDirectory(diffOutputDir);
         }
 
-        await LogAsync($"Summary: {included} included, {skippedJitDiff} jit-diff failed");
+        await LogAsync($"Summary: {included} included, {skippedJitDiff} jit-diff failed, {skippedDuplicateDll} duplicate DLL names");
 
         if (included == 0)
         {
