@@ -16,7 +16,8 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         [
             "CommunityToolkit.HighPerformance", "CommunityToolkit.Mvvm", "CommunityToolkit.Diagnostics",
             "SixLabors.ImageSharp", "SixLabors.Fonts", "SixLabors.ImageSharp.Drawing",
-            "dnlib", "AsmResolver", "BepuPhysics", "Avalonia", "Uno.UI"
+            "dnlib", "AsmResolver", "BepuPhysics", "Avalonia", "Uno.UI",
+            "Markdig", "Yarp.ReverseProxy",
         ],
         StringComparer.OrdinalIgnoreCase);
 
