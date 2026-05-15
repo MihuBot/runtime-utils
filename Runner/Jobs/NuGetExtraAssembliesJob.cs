@@ -14,6 +14,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
     private static HashSet<string> ExtraPackages { get; } = new(
         [
+            "CommunityToolkit.HighPerformance", "CommunityToolkit.Mvvm", "CommunityToolkit.Diagnostics",
             "SixLabors.ImageSharp", "SixLabors.Fonts", "SixLabors.ImageSharp.Drawing",
             "dnlib", "AsmResolver", "BepuPhysics",
         ],
