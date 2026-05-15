@@ -116,6 +116,27 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
     private async Task ProcessApprovedPackagesAsync(List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)> approvedPackages)
     {
+        // Skip packages whose main DLL shares a name with a system library in core_root
+        var systemDlls = new HashSet<string>(
+            Directory.GetFiles("artifacts-main", "*.dll").Select(Path.GetFileName)!,
+            StringComparer.OrdinalIgnoreCase);
+
+        int skippedSystem = 0;
+        approvedPackages.RemoveAll(p =>
+        {
+            if (systemDlls.Contains(p.Dll))
+            {
+                skippedSystem++;
+                return true;
+            }
+            return false;
+        });
+
+        if (skippedSystem > 0)
+        {
+            await LogAsync($"Skipped {skippedSystem} packages with DLLs already in core_root");
+        }
+
         int included = 0, skippedJitDiff = 0;
         string diffOutputDir = "nuget-diff-temp";
         Directory.CreateDirectory(diffOutputDir);

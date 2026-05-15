@@ -359,7 +359,20 @@ internal sealed class JitDiffJob : JobBase
                 projectsRoot = topDirs[0];
             }
 
+            // Skip projects whose main DLL shares a name with a system library in core_root
+            var systemDlls = new HashSet<string>(
+                Directory.GetFiles(coreRootFolder, "*.dll").Select(Path.GetFileName)!,
+                StringComparer.OrdinalIgnoreCase);
+
             var projectDirs = new Queue<string>(Directory.GetDirectories(projectsRoot)
+                .Where(d =>
+                {
+                    string diffAssembliesPath = Path.Combine(d, "DiffAssemblies.txt");
+                    string mainDll = File.Exists(diffAssembliesPath)
+                        ? File.ReadLines(diffAssembliesPath).FirstOrDefault(l => l.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)) ?? $"{Path.GetFileName(d)}.dll"
+                        : $"{Path.GetFileName(d)}.dll";
+                    return !systemDlls.Contains(mainDll);
+                })
                 .OrderByDescending(d => Directory.GetFiles(d, "*.dll").Sum(f => new FileInfo(f).Length)));
             if (projectDirs.Count == 0)
             {
