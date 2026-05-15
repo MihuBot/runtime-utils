@@ -433,6 +433,9 @@ internal sealed class JitDiffJob : JobBase
                         await LogAsync($"Failed to diff {Path.GetFileName(projectDir)}: {ex.Message}");
                     }
                 }
+
+                try { Directory.Delete(newCoreRootFolder, recursive: true); } catch { }
+                try { Directory.Delete(newCheckedClrFolder, recursive: true); } catch { }
             });
         }
 
