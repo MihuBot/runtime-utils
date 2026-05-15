@@ -304,8 +304,8 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             Directory.GetDirectories(OutputDir).Select(Path.GetFileName)!,
             StringComparer.OrdinalIgnoreCase);
 
-        string topNDir = $"{OutputDir}-top{topN}";
-        Directory.CreateDirectory(topNDir);
+        string subsetDir = $"{OutputDir}-subset";
+        Directory.CreateDirectory(subsetDir);
 
         int nonExtraCount = 0;
         foreach (var pkg in approvedPackages)
@@ -321,13 +321,13 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 nonExtraCount++;
             }
 
-            CopyDirectory(Path.Combine(OutputDir, pkg.Id), Path.Combine(topNDir, pkg.Id));
+            CopyDirectory(Path.Combine(OutputDir, pkg.Id), Path.Combine(subsetDir, pkg.Id));
         }
 
-        int totalCount = Directory.GetDirectories(topNDir).Length;
-        await LogAsync($"Top-{topN} archive: {totalCount} packages ({nonExtraCount} top + {totalCount - nonExtraCount} extra)");
-        await ZipAndUploadArtifactAsync(topNDir, topNDir, maxCompression: true);
-        DeleteDirectory(topNDir);
+        int totalCount = Directory.GetDirectories(subsetDir).Length;
+        await LogAsync($"Subset archive: {totalCount} packages ({nonExtraCount} top + {totalCount - nonExtraCount} extra)");
+        await ZipAndUploadArtifactAsync(subsetDir, subsetDir, maxCompression: true);
+        DeleteDirectory(subsetDir);
     }
 
     private static void CopyDirectory(string source, string destination)

@@ -287,8 +287,17 @@ internal sealed class JitDiffJob : JobBase
     {
         try
         {
-            if (!TryGetFlag("nuget") ||
-                !Metadata.TryGetValue("JitDiffExtraAssembliesUrl", out string? url))
+            string? url;
+
+            if (TryGetFlag("nuget") && Metadata.TryGetValue("JitDiffExtraAssembliesUrl", out url))
+            {
+                // Use the full archive when explicitly requested
+            }
+            else if (!IsArm && Metadata.TryGetValue("JitDiffExtraAssembliesSubsetUrl", out url))
+            {
+                // Fall back to the smaller subset archive on x64
+            }
+            else
             {
                 return;
             }
