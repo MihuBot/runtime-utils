@@ -194,27 +194,28 @@ internal sealed class NuGetClient
                                 x.Parts[2].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                     .ToList();
 
-                // Prefer the DLL matching the package name, fall back if there's exactly one DLL
-                var matchingEntries = allDllEntries
-                    .Where(x => x.Parts[2].Equals(expectedDll, StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                if (matchingEntries.Count == 0 && allDllEntries.Count == 1)
-                    matchingEntries = allDllEntries;
-
-                var tfmGroups = matchingEntries
+                var tfmGroups = allDllEntries
                     .GroupBy(x => x.Parts[1])
-                    .OrderByDescending(g => GetTfmPriority(g.Key))
+                    .Select(g =>
+                    {
+                        // Prefer the DLL matching the package name, fall back if there's exactly one DLL in the TFM
+                        var match = g.FirstOrDefault(x => x.Parts[2].Equals(expectedDll, StringComparison.OrdinalIgnoreCase));
+                        if (match.Entry is null && g.Count() == 1)
+                            match = g.First();
+                        return (Tfm: g.Key, Entry: match);
+                    })
+                    .Where(x => x.Entry.Entry is not null)
+                    .OrderByDescending(x => GetTfmPriority(x.Tfm))
                     .ToList();
 
-                if (tfmGroups.Count == 0 || GetTfmPriority(tfmGroups[0].Key) < 0)
+                if (tfmGroups.Count == 0 || GetTfmPriority(tfmGroups[0].Tfm) < 0)
                 {
                     File.Delete(nupkgPath);
                     return (null, null);
                 }
 
-                selectedTfm = tfmGroups[0].Key;
-                var entry = tfmGroups[0].First();
+                selectedTfm = tfmGroups[0].Tfm;
+                var entry = tfmGroups[0].Entry;
 
                 string destPath = Path.Combine(extractDir, entry.Parts[2]);
                 entry.Entry.ExtractToFile(destPath, overwrite: true);
