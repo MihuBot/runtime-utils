@@ -296,6 +296,9 @@ internal sealed class JitDiffJob : JobBase
             else if (!TryGetFlag("nonuget") && !IsArm && Metadata.TryGetValue("JitDiffExtraAssembliesSubsetUrl", out url))
             {
                 // Fall back to the smaller subset archive on x64
+
+                // TEMP: Skip NuGet subset for now while diffs show too much noise
+                return;
             }
             else
             {
