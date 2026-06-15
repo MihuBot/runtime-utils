@@ -415,9 +415,17 @@ public abstract class JobBase
             output ??= [];
         }
 
+        envVars = [.. _sharedEnvVars, .. envVars ?? []];
+
         if (!suppressStartingLog)
         {
-            await LogAsync($"{logPrefix}{processLogs($"Running '{fileName} {arguments}'{(workDir is null ? null : $" from '{workDir}'")}")}");
+            string workDirLog = workDir is null ? "" : $" from '{workDir}'";
+
+            string envVarsLog = envVars.Count == 0
+                ? ""
+                : " using env vars: " + string.Join(", ", envVars.Select(e => $"{e.Item1}={e.Item2}"));
+
+            await LogAsync($"{logPrefix}{processLogs($"Running '{fileName} {arguments}'{workDirLog}{envVarsLog}")}");
         }
 
         var startInfo = new ProcessStartInfo(fileName, arguments)
@@ -426,8 +434,6 @@ public abstract class JobBase
             RedirectStandardOutput = true,
             WorkingDirectory = workDir ?? string.Empty,
         };
-
-        envVars = [.. _sharedEnvVars, .. envVars ?? []];
 
         foreach ((string key, string value) in envVars)
         {

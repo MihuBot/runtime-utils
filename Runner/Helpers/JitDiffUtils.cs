@@ -31,6 +31,11 @@ internal static partial class JitDiffUtils
             envVars.Add(("DOTNET_JitDisasmWithGC", "1"));
         }
 
+        if (job.TryGetFlag("DisableOptimizedThreadStaticAccess"))
+        {
+            envVars.Add(("DOTNET_DisableOptimizedThreadStaticAccess", "1"));
+        }
+
         await job.RunProcessAsync("jitutils/bin/jit-diff",
             $"diff " +
             (debugInfo ? "--debuginfo " : "") +
