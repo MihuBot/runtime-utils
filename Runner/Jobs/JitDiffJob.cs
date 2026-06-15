@@ -201,31 +201,40 @@ internal sealed class JitDiffJob : JobBase
             await job.RunProcessAsync("bash", "build.sh -clean", logPrefix: $"{branch} clean", workDir: "runtime");
         }
 
-        await job.RunProcessAsync("bash", $"build.sh {targets} -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
+        await RuntimePatches.ApplyPatchesAsync(job);
 
-        Task copyReleaseBitsTask = RuntimeHelpers.CopyReleaseArtifactsAsync(job, $"{branch} release", $"artifacts-{branch}");
-
-        if (buildChecked)
+        try
         {
-            if (rebuildClr)
-            {
-                await job.RunProcessAsync("bash", "build.sh clr.jit -c Checked", logPrefix: $"{branch} checked", workDir: "runtime");
-            }
+            await job.RunProcessAsync("bash", $"build.sh {targets} -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
 
-            await job.RunProcessAsync("cp", $"-r runtime/artifacts/bin/coreclr/linux.{Arch}.Checked/. clr-checked-{branch}", logPrefix: $"{branch} checked");
-        }
-
-        if (uploadArtifacts)
-        {
-            job.PendingTasks.Enqueue(job.ZipAndUploadArtifactAsync($"build-artifacts-{branch}", $"artifacts-{branch}"));
+            Task copyReleaseBitsTask = RuntimeHelpers.CopyReleaseArtifactsAsync(job, $"{branch} release", $"artifacts-{branch}");
 
             if (buildChecked)
             {
-                job.PendingTasks.Enqueue(job.ZipAndUploadArtifactAsync($"build-clr-checked-{branch}", $"clr-checked-{branch}"));
-            }
-        }
+                if (rebuildClr)
+                {
+                    await job.RunProcessAsync("bash", "build.sh clr.jit -c Checked", logPrefix: $"{branch} checked", workDir: "runtime");
+                }
 
-        await copyReleaseBitsTask;
+                await job.RunProcessAsync("cp", $"-r runtime/artifacts/bin/coreclr/linux.{Arch}.Checked/. clr-checked-{branch}", logPrefix: $"{branch} checked");
+            }
+
+            if (uploadArtifacts)
+            {
+                job.PendingTasks.Enqueue(job.ZipAndUploadArtifactAsync($"build-artifacts-{branch}", $"artifacts-{branch}"));
+
+                if (buildChecked)
+                {
+                    job.PendingTasks.Enqueue(job.ZipAndUploadArtifactAsync($"build-clr-checked-{branch}", $"clr-checked-{branch}"));
+                }
+            }
+
+            await copyReleaseBitsTask;
+        }
+        finally
+        {
+            await RuntimePatches.RevertPatchesAsync(job);
+        }
 
         bool ForceRebuildAll() => job.TryGetFlag("forceRebuildAll");
 
