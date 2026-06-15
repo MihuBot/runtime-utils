@@ -415,13 +415,11 @@ public abstract class JobBase
             output ??= [];
         }
 
-        envVars = [.. _sharedEnvVars, .. envVars ?? []];
-
         if (!suppressStartingLog)
         {
             string workDirLog = workDir is null ? "" : $" from '{workDir}'";
 
-            string envVarsLog = envVars.Count == 0
+            string envVarsLog = envVars is null || envVars.Count == 0
                 ? ""
                 : " using env vars: " + string.Join(", ", envVars.Select(e => $"{e.Item1}={e.Item2}"));
 
@@ -434,6 +432,8 @@ public abstract class JobBase
             RedirectStandardOutput = true,
             WorkingDirectory = workDir ?? string.Empty,
         };
+
+        envVars = [.. _sharedEnvVars, .. envVars ?? []];
 
         foreach ((string key, string value) in envVars)
         {
