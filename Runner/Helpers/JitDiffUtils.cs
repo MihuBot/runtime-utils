@@ -23,6 +23,7 @@ internal static partial class JitDiffUtils
         bool verbose = job.TryGetFlag("verbose");
         bool debugInfo = job.TryGetFlag("debuginfo");
         bool gcInfo = job.TryGetFlag("gcinfo");
+        bool sequential = job.TryGetFlag("sequential");
 
         List<(string, string)> envVars = [];
 
@@ -43,6 +44,7 @@ internal static partial class JitDiffUtils
             (useCctors ? "--cctors " : "") +
             (useTier0 ? "--tier0 " : "") +
             (gcInfo ? "--gcinfo " : "") +
+            (sequential ? "--sequential " : "") +
             $"--output {outputFolder} " +
             $"{frameworksOrAssembly} --pmi " +
             $"--core_root {coreRootFolder} " +
