@@ -201,7 +201,12 @@ internal sealed class JitDiffJob : JobBase
             await job.RunProcessAsync("bash", "build.sh -clean", logPrefix: $"{branch} clean", workDir: "runtime");
         }
 
-        await RuntimePatches.ApplyPatchesAsync(job);
+        bool runPatches = !job.TryGetFlag("skipRuntimePatches");
+
+        if (runPatches)
+        {
+            await RuntimePatches.ApplyPatchesAsync(job);
+        }
 
         try
         {
@@ -233,7 +238,10 @@ internal sealed class JitDiffJob : JobBase
         }
         finally
         {
-            await RuntimePatches.RevertPatchesAsync(job);
+            if (runPatches)
+            {
+                await RuntimePatches.RevertPatchesAsync(job);
+            }
         }
 
         bool ForceRebuildAll() => job.TryGetFlag("forceRebuildAll");
