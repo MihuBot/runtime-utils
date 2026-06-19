@@ -71,7 +71,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         await RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main");
     }
 
-    private async Task<List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)>> GatherNuGetInfoAsync(int count)
+    private async Task<List<PackageInfo>> GatherNuGetInfoAsync(int count)
     {
         await LogAsync($"Searching for top {count} NuGet packages ...");
         var packages = await _nuget.SearchTopPackagesAsync(count);
@@ -97,7 +97,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         string packagesDir = "nuget-packages-temp";
         Directory.CreateDirectory(packagesDir);
 
-        var approvedPackages = new List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)>();
+        var approvedPackages = new List<PackageInfo>();
 
         for (int i = 0; i < packages.Count; i++)
         {
@@ -138,7 +138,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 continue;
             }
 
-            approvedPackages.Add((id, version, pkgDir, dll, deps));
+            approvedPackages.Add(new PackageInfo(id, version, pkgDir, dll, deps));
             await LogAsync($"{prefix} - approved ({deps.Count} deps)");
         }
 
@@ -152,7 +152,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         return approvedPackages;
     }
 
-    private async Task ProcessApprovedPackagesAsync(List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)> approvedPackages)
+    private async Task ProcessApprovedPackagesAsync(List<PackageInfo> approvedPackages)
     {
         // Skip packages whose main DLL shares a name with a system library in core_root
         var systemDlls = new HashSet<string>(
@@ -194,15 +194,17 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             await LogAsync($"Skipped {skippedDuplicateDll} packages with duplicate DLL names");
         }
 
-        int included = 0, skippedJitDiff = 0;
+        int skippedJitDiff = 0;
         string diffOutputDir = "nuget-diff-temp";
         Directory.CreateDirectory(diffOutputDir);
 
         int memoryParallelism = OnRamDisk ? GetRemainingSystemMemoryGB() / 3 : GetRemainingSystemMemoryGB() * 2;
         int parallelism = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), approvedPackages.Count);
         parallelism = Math.Max(parallelism, 1);
-        var packageQueue = new Queue<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)>(
+        var packageQueue = new Queue<PackageInfo>(
             approvedPackages.OrderByDescending(p => new FileInfo(Path.Combine(p.PkgDir, p.Dll)).Length));
+
+        List<PackageInfo> includedPackages = [];
 
         try
         {
@@ -217,14 +219,14 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 {
                     while (true)
                     {
-                        (string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps) pkg;
+                        PackageInfo? pkg;
                         lock (packageQueue)
                         {
                             if (!packageQueue.TryDequeue(out pkg))
                                 break;
                         }
 
-                        LastProgressSummary = $"Processing NuGet packages. ~{packageQueue.Count} remaining, {included} included.";
+                        LastProgressSummary = $"Processing NuGet packages. ~{packageQueue.Count} remaining, {includedPackages.Count} included.";
 
                         string pkgDiffDir = Path.Combine(diffOutputDir, pkg.Id);
                         Directory.CreateDirectory(pkgDiffDir);
@@ -277,7 +279,11 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                             }
                             File.WriteAllText(Path.Combine(outputPkgDir, "version.txt"), versionLines.ToString());
 
-                            Interlocked.Increment(ref included);
+                            lock (includedPackages)
+                            {
+                                includedPackages.Add(pkg);
+                            }
+
                             await LogAsync($"[NuGet] {pkg.Id} - included ({pkg.Deps.Count} deps)");
                         }
                         finally
@@ -299,15 +305,17 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             DeleteDirectory(diffOutputDir);
         }
 
-        await LogAsync($"Summary: {included} included, {skippedJitDiff} jit-diff failed, {skippedDuplicateDll} duplicate DLL names");
+        await WritePackageListAsync(OutputDir, includedPackages);
 
-        if (included == 0)
+        await LogAsync($"Summary: {includedPackages.Count} included, {skippedJitDiff} jit-diff failed, {skippedDuplicateDll} duplicate DLL names");
+
+        if (includedPackages.Count == 0)
         {
             throw new Exception("No packages were included in the archive.");
         }
     }
 
-    private async Task CreateTopNArchiveAsync(List<(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps)> approvedPackages, int topN)
+    private async Task CreateTopNArchiveAsync(List<PackageInfo> approvedPackages, int topN)
     {
         var includedIds = new HashSet<string>(
             Directory.GetDirectories(OutputDir).Select(Path.GetFileName)!,
@@ -315,6 +323,8 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         string subsetDir = $"{OutputDir}-subset";
         Directory.CreateDirectory(subsetDir);
+
+        List<PackageInfo> topNPackages = [];
 
         int nonExtraCount = 0;
         foreach (var pkg in approvedPackages)
@@ -330,13 +340,27 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 nonExtraCount++;
             }
 
+            topNPackages.Add(pkg);
+        }
+
+        foreach (var pkg in topNPackages)
+        {
             CopyDirectory(Path.Combine(OutputDir, pkg.Id), Path.Combine(subsetDir, pkg.Id));
         }
+
+        await WritePackageListAsync(subsetDir, topNPackages);
 
         int totalCount = Directory.GetDirectories(subsetDir).Length;
         await LogAsync($"Subset archive: {totalCount} packages ({nonExtraCount} top + {totalCount - nonExtraCount} extra)");
         await ZipAndUploadArtifactAsync(subsetDir, subsetDir, maxCompression: true);
         DeleteDirectory(subsetDir);
+    }
+
+    private static async Task WritePackageListAsync(string directory, List<PackageInfo> packages)
+    {
+        await File.WriteAllTextAsync(
+            Path.Combine(directory, "PackageList.json"),
+            JsonSerializer.Serialize(packages));
     }
 
     private static void CopyDirectory(string source, string destination)
@@ -355,4 +379,6 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
     {
         try { Directory.Delete(path, recursive: true); } catch { }
     }
+
+    private record PackageInfo(string Id, string Version, string PkgDir, string Dll, Dictionary<string, string> Deps);
 }

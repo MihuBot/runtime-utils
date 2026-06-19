@@ -313,9 +313,6 @@ internal sealed class JitDiffJob : JobBase
             else if (!TryGetFlag("nonuget") && !IsArm && Metadata.TryGetValue("JitDiffExtraAssembliesSubsetUrl", out url))
             {
                 // Fall back to the smaller subset archive on x64
-
-                // TEMP: Skip NuGet subset for now while diffs show too much noise
-                return;
             }
             else
             {
@@ -338,6 +335,12 @@ internal sealed class JitDiffJob : JobBase
 
             int count = Directory.GetDirectories(ExtraProjectsDirectory).Length;
             await LogAsync($"[Extra assemblies] Extracted {count} packages");
+
+            string packageListPath = Path.Combine(ExtraProjectsDirectory, "PackageList.json");
+            if (File.Exists(packageListPath))
+            {
+                PendingTasks.Enqueue(UploadArtifactAsync(packageListPath));
+            }
         }
         catch (Exception ex)
         {
