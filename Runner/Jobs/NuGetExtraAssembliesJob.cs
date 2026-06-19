@@ -287,9 +287,11 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         {
             List<PackageInfo> original = includedPackages;
 
-            includedPackages = approvedPackages
+            includedPackages = approvedPackages.Where(p => ExtraPackages.Contains(p.Id))
+                .Concat(approvedPackages)
                 .Select(p => includedPackages.FirstOrDefault(ip => ip.Id == p.Id))
                 .Where(p => p is not null)
+                .DistinctBy(p => p!.Id)
                 .Take(maxPackagesToInclude)
                 .ToList()!;
 
