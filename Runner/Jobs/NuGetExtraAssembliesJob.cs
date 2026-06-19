@@ -17,6 +17,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             "CommunityToolkit.HighPerformance", "CommunityToolkit.Mvvm", "CommunityToolkit.Diagnostics",
             "SixLabors.ImageSharp", "SixLabors.Fonts", "SixLabors.ImageSharp.Drawing",
             "dnlib", "AsmResolver", "BepuPhysics", "Avalonia", "Uno.UI",
+            "MessagePack", "NodaTime",
             "Markdig", "Yarp.ReverseProxy",
 
             "Silk.NET.Core", "Silk.NET.Maths", "Silk.NET.OpenGL", "Silk.NET.Vulkan", "Silk.NET.OpenGLES", "Silk.NET.Vulkan.Extensions.KHR",
