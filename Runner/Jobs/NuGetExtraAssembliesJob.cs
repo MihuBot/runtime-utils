@@ -223,9 +223,6 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                         {
                             if (!packageQueue.TryDequeue(out pkg))
                                 break;
-
-                            if (includedPackages.Count >= maxPackagesToInclude)
-                                break;
                         }
 
                         LastProgressSummary = $"Processing NuGet packages. ~{packageQueue.Count} remaining, {includedPackages.Count} included.";
@@ -290,10 +287,11 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         {
             List<PackageInfo> original = includedPackages;
 
-            includedPackages = includedPackages
-                .OrderByDescending(p => new FileInfo(Path.Combine(p.PkgDir, p.Dll)).Length)
+            includedPackages = approvedPackages
+                .Select(p => includedPackages.FirstOrDefault(ip => ip.Id == p.Id))
+                .Where(p => p is not null)
                 .Take(maxPackagesToInclude)
-                .ToList();
+                .ToList()!;
 
             await LogAsync($"[NuGet] Trimmed included packages from {original.Count} to {includedPackages.Count}. Removed: {string.Join(", ", original.Except(includedPackages).Select(p => p.Id))}");
         }
