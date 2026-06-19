@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Extensions.Caching.Hybrid;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -53,10 +52,10 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         }
 
         var runtimeTask = BuildRuntimeAsync();
-        var approvedPackages = await GatherNuGetInfoAsync(packageCount);
+        var approvedPackages = await GatherNuGetInfoAsync(packageCount * 3); // 3x to compensate for packages we'll rule out later
         await runtimeTask;
 
-        await ProcessApprovedPackagesAsync(approvedPackages);
+        await ProcessApprovedPackagesAsync(approvedPackages, packageCount);
 
         await ZipAndUploadArtifactAsync(OutputDir, OutputDir, maxCompression: true);
 
@@ -152,7 +151,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         return approvedPackages;
     }
 
-    private async Task ProcessApprovedPackagesAsync(List<PackageInfo> approvedPackages)
+    private async Task ProcessApprovedPackagesAsync(List<PackageInfo> approvedPackages, int maxPackagesToInclude)
     {
         // Skip packages whose main DLL shares a name with a system library in core_root
         var systemDlls = new HashSet<string>(
@@ -224,6 +223,9 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                         {
                             if (!packageQueue.TryDequeue(out pkg))
                                 break;
+
+                            if (includedPackages.Count >= maxPackagesToInclude)
+                                break;
                         }
 
                         LastProgressSummary = $"Processing NuGet packages. ~{packageQueue.Count} remaining, {includedPackages.Count} included.";
@@ -259,26 +261,6 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                                 continue;
                             }
 
-                            string outputPkgDir = Path.Combine(OutputDir, pkg.Id);
-                            Directory.CreateDirectory(outputPkgDir);
-
-                            foreach (string file in Directory.GetFiles(pkg.PkgDir, "*.dll"))
-                            {
-                                File.Copy(file, Path.Combine(outputPkgDir, Path.GetFileName(file)), overwrite: true);
-                            }
-
-                            // Write DiffAssemblies.txt so JitDiffJob only diffs the main DLL, not dependencies
-                            File.WriteAllText(Path.Combine(outputPkgDir, "DiffAssemblies.txt"), pkg.Dll);
-
-                            // Write version.txt with package and dependency versions
-                            var versionLines = new StringBuilder();
-                            versionLines.AppendLine($"{pkg.Id} {pkg.Version}");
-                            foreach (var (depId, depVersion) in pkg.Deps.OrderBy(d => d.Key, StringComparer.OrdinalIgnoreCase))
-                            {
-                                versionLines.AppendLine($"{depId} {depVersion}");
-                            }
-                            File.WriteAllText(Path.Combine(outputPkgDir, "version.txt"), versionLines.ToString());
-
                             lock (includedPackages)
                             {
                                 includedPackages.Add(pkg);
@@ -288,7 +270,6 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                         }
                         finally
                         {
-                            DeleteDirectory(pkg.PkgDir);
                             DeleteDirectory(pkgDiffDir);
                         }
                     }
@@ -304,6 +285,35 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         {
             DeleteDirectory(diffOutputDir);
         }
+
+        if (includedPackages.Count > maxPackagesToInclude)
+        {
+            List<PackageInfo> original = includedPackages;
+
+            includedPackages = includedPackages
+                .OrderByDescending(p => new FileInfo(Path.Combine(p.PkgDir, p.Dll)).Length)
+                .Take(maxPackagesToInclude)
+                .ToList();
+
+            await LogAsync($"[NuGet] Trimmed included packages from {original.Count} to {includedPackages.Count}. Removed: {string.Join(", ", original.Except(includedPackages).Select(p => p.Id))}");
+        }
+
+        await Parallel.ForEachAsync(includedPackages, async (pkg, _) =>
+        {
+            string outputPkgDir = Path.Combine(OutputDir, pkg.Id);
+            Directory.CreateDirectory(outputPkgDir);
+
+            foreach (string file in Directory.GetFiles(pkg.PkgDir, "*.dll"))
+            {
+                File.Copy(file, Path.Combine(outputPkgDir, Path.GetFileName(file)), overwrite: true);
+            }
+
+            // Write DiffAssemblies.txt so JitDiffJob only diffs the main DLL, not dependencies
+            File.WriteAllText(Path.Combine(outputPkgDir, "DiffAssemblies.txt"), pkg.Dll);
+
+            // Write version.txt with package and dependency versions
+            File.WriteAllText(Path.Combine(outputPkgDir, "PackageInfo.json"), JsonSerializer.Serialize(pkg));
+        });
 
         await WritePackageListAsync(OutputDir, includedPackages);
 
