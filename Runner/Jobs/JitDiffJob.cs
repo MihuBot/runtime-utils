@@ -360,9 +360,11 @@ internal sealed class JitDiffJob : JobBase
                 RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main"),
                 RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-pr"));
 
+            int memoryAvailableGB = GetRemainingSystemMemoryGB();
+
             await Task.WhenAll(
-                DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory),
-                DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
+                DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory, memoryAvailableGB),
+                DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory, memoryAvailableGB));
         }
         finally
         {
@@ -379,7 +381,7 @@ internal sealed class JitDiffJob : JobBase
 
         return diffAnalyzeSummary;
 
-        async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder)
+        async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder, int memoryAvailableGB)
         {
             string projectsRoot = ExtraProjectsDirectory;
             string branch = coreRootFolder.Contains("main", StringComparison.Ordinal) ? "main" : "pr";
@@ -411,16 +413,27 @@ internal sealed class JitDiffJob : JobBase
                 return;
             }
 
-            int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount / 2, GetRemainingSystemMemoryGB() / 3), projectDirs.Count / 20);
-            coreRootCopies = Math.Max(coreRootCopies, 1);
+            int memoryParallelism = OnRamDisk ? (int)(memoryAvailableGB / 2.5) : memoryAvailableGB * 2;
+            int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), projectDirs.Count);
+            coreRootCopies = Math.Max(coreRootCopies / 2, 1); // / 2 because we run for main and pr in parallel
+            var countdown = new CountdownEvent(coreRootCopies);
 
             await Parallel.ForAsync(0, coreRootCopies, async (index, _) =>
             {
-                string newCoreRootFolder = $"{coreRootFolder}_{index}";
-                string newCheckedClrFolder = $"{checkedClrFolder}_{index}";
+                string newCoreRootFolder = coreRootFolder;
+                string newCheckedClrFolder = checkedClrFolder;
 
-                CopyDirectory(coreRootFolder, newCoreRootFolder);
-                CopyDirectory(checkedClrFolder, newCheckedClrFolder);
+                if (index > 0)
+                {
+                    newCoreRootFolder = $"{newCoreRootFolder}_{index}";
+                    newCheckedClrFolder = $"{newCheckedClrFolder}_{index}";
+
+                    CopyDirectory(coreRootFolder, newCoreRootFolder);
+                    CopyDirectory(checkedClrFolder, newCheckedClrFolder);
+                }
+
+                countdown.Signal();
+                countdown.Wait(JobTimeout);
 
                 while (true)
                 {
@@ -466,8 +479,11 @@ internal sealed class JitDiffJob : JobBase
                     }
                 }
 
-                try { Directory.Delete(newCoreRootFolder, recursive: true); } catch { }
-                try { Directory.Delete(newCheckedClrFolder, recursive: true); } catch { }
+                if (index > 0)
+                {
+                    try { Directory.Delete(newCoreRootFolder, recursive: true); } catch { }
+                    try { Directory.Delete(newCheckedClrFolder, recursive: true); } catch { }
+                }
             });
         }
 
