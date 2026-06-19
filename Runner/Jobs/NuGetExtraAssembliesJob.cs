@@ -18,6 +18,13 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             "SixLabors.ImageSharp", "SixLabors.Fonts", "SixLabors.ImageSharp.Drawing",
             "dnlib", "AsmResolver", "BepuPhysics", "Avalonia", "Uno.UI",
             "Markdig", "Yarp.ReverseProxy",
+
+            "Silk.NET.Core", "Silk.NET.Maths", "Silk.NET.OpenGL", "Silk.NET.Vulkan", "Silk.NET.OpenGLES", "Silk.NET.Vulkan.Extensions.KHR",
+            "Silk.NET.GLFW", "Silk.NET.Windowing.Common", "Silk.NET.Vulkan.Extensions.EXT", "Silk.NET.Input.Common", "Silk.NET.Windowing.Glfw",
+            "Silk.NET.SDL", "Silk.NET.OpenAL", "Silk.NET.Input.Glfw", "Silk.NET.Windowing.Sdl", "Silk.NET.OpenGL.Legacy", "Silk.NET.Input.Sdl",
+            "Silk.NET.OpenXR", "Silk.NET.Assimp", "Silk.NET.DXGI", "Silk.NET.OpenGLES.Extensions.EXT", "Silk.NET.Input.Extensions", "Silk.NET.OpenCL",
+            "Silk.NET.Direct3D11", "Silk.NET.OpenGL.Extensions.ImGui", "Silk.NET.OpenXR.Extensions.FB", "Silk.NET.Direct3D.Compilers",
+            "Silk.NET.OpenAL.Extensions.EXT", "Silk.NET.OpenAL.Extensions.Enumeration", "Silk.NET.OpenAL.Extensions.Creative", "Silk.NET.Direct3D12",
         ],
         StringComparer.OrdinalIgnoreCase);
 
