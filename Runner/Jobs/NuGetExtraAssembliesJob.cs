@@ -239,6 +239,17 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                                 {
                                     await _nuget.DownloadDependencyDllsAsync(depId, depVersion, pkg.PkgDir);
                                 }
+
+                                // Remove dependency DLLs that are already provided in core_root (e.g. System.Memory).
+                                foreach (string depDll in Directory.GetFiles(pkg.PkgDir, "*.dll"))
+                                {
+                                    string depDllName = Path.GetFileName(depDll);
+                                    if (!depDllName.Equals(pkg.Dll, StringComparison.OrdinalIgnoreCase) &&
+                                        systemDlls.Contains(depDllName))
+                                    {
+                                        File.Delete(depDll);
+                                    }
+                                }
                             }
 
                             // Validate main DLL with jit-diff
