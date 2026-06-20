@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <NoWarn>${NoWarn};IDE0305</NoWarn>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,4 +1,5 @@
 ﻿using System.IO.Pipelines;
+using System.Runtime.InteropServices;
 
 namespace Runner.Helpers;
 
@@ -13,9 +14,10 @@ internal static partial class JitDiffUtils
     /// <summary>
     /// Creates a lightweight per-worker clone of a core_root for running jit-diff in parallel.
     /// The bulk of the (multi-hundred-MB) shared framework is shared with <paramref name="source"/> via
-    /// links - a single physical copy on disk - while the JIT libraries that jit-diff overwrites in
-    /// place are given to the worker as private, writable copies. This avoids duplicating the whole
-    /// core_root for every parallel invocation.
+    /// hard links - a single physical copy on disk (and in RAM, on a ramdisk) - while the JIT libraries
+    /// that jit-diff overwrites in place are given to the worker as private, writable copies. This avoids
+    /// duplicating the whole core_root for every parallel invocation. Falls back to a full copy where hard
+    /// links are unavailable (e.g. across file systems).
     /// </summary>
     public static void CreateCoreRootCloneForJitDiff(string source, string destination)
     {
@@ -26,16 +28,41 @@ internal static partial class JitDiffUtils
             string destFile = Path.Combine(destination, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
 
-            if (s_jitDiffMutatedCoreRootFiles.Contains(Path.GetFileName(file)))
+            // The JIT is overwritten in place by jit-diff, so each worker needs its own real copy.
+            // Everything else is shared via hard links. Symbolic links can't be used here: corerun finds
+            // its core root via /proc/self/exe and coreclr loads the JIT from libcoreclr.so's directory,
+            // both of which canonicalize symlinks back to the shared 'source'. A symlinked corerun /
+            // libcoreclr.so therefore makes every worker load 'source's JIT instead of its private copy
+            // (and jit-diff's File.Copy onto a symlinked libclrjit.so would clobber the shared original).
+            // A hard link is just another directory entry for the same inode, with no such path indirection.
+            if (s_jitDiffMutatedCoreRootFiles.Contains(Path.GetFileName(file)) || !TryCreateHardLink(file, destFile))
             {
                 File.Copy(file, destFile, overwrite: true);
             }
-            else
-            {
-                File.CreateSymbolicLink(destFile, file);
-            }
         }
     }
+
+    private static bool TryCreateHardLink(string source, string destination)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            return false;
+        }
+
+        try
+        {
+            return LinkUnix(source, destination) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    [LibraryImport("libc", EntryPoint = "link", SetLastError = true)]
+    private static partial int LinkUnix(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string oldPath,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string newPath);
 
     public static async Task RunJitDiffOnFrameworksAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder)
     {
