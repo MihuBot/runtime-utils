@@ -134,7 +134,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             if (dll is null || selectedTfm is null)
             {
                 await LogAsync($"{prefix} - skipped (no suitable DLL)");
-                Interlocked.Increment(ref skippedLicense);
+                Interlocked.Increment(ref skippedNoDlls);
                 DeleteDirectory(pkgDir);
                 return;
             }
