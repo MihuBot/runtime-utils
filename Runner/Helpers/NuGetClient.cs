@@ -23,7 +23,26 @@ internal sealed class NuGetClient
         "MIT", "Apache-1.1", "Apache-2.0", "BSD-1-Clause", "BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear",
         "ISC", "MS-PL", "Unlicense", "0BSD", "CC0-1.0", "Zlib", "NCSA",
         "BSL-1.0", "PostgreSQL", "X11", "MIT-0", "WTFPL", "MulanPSL-2.0",
+        "mit-license", "bsd-license", "bsd", "apache2.0", "apache-license-2.0",
     };
+
+    private static readonly string[] s_nonPermissiveMarkers =
+    [
+        "general public license",        // GPL / LGPL / AGPL
+        "mozilla public license",        // MPL
+        "eclipse public license",        // EPL
+        "common public license",         // CPL
+        "common development and distribution license", // CDDL
+        "microsoft reciprocal license",  // MS-RL
+        "server side public license",    // SSPL
+        "business source license",       // BUSL
+        "polyform",                      // PolyForm Noncommercial/etc.
+        "commons clause",
+        "all advertising materials",     // BSD-4-Clause / OpenSSL advertising clause
+        "noncommercial",                 // CC *-NC, PolyForm Noncommercial (one word; permissive
+                                         // licenses use the hyphenated "non-commercial" to mean "any use")
+        "shall be used for good, not evil", // JSON license
+    ];
 
     private readonly HttpClient _httpClient;
     private readonly HybridCache _cache;
@@ -108,92 +127,241 @@ internal sealed class NuGetClient
 
     // === License ===
 
-    public async Task<string?> GetLicenseExpressionAsync(string id, string version)
+    /// <summary>
+    /// Determines whether a package version is permissively licensed. Recognizes SPDX
+    /// <c>&lt;license&gt;</c> expressions, embedded license files, and (legacy) <c>licenseUrl</c>s, and
+    /// falls back to fetching and matching the text of unrecognized license files/URLs against the
+    /// wording of common permissive licenses.
+    /// </summary>
+    public async Task<bool> IsPermissivelyLicensedAsync(string id, string version)
     {
+        // HybridCache has a built-in serializer for string but not bool, so cache a "1"/"0" sentinel.
         string result = await _cache.GetOrCreateAsync(
-            $"license:{id.ToLowerInvariant()}:{version.ToLowerInvariant()}",
+            $"permissive:{id.ToLowerInvariant()}:{version.ToLowerInvariant()}",
             async ct =>
             {
-                string? expression = await FetchLicenseExpressionAsync(id, version, ct);
+                bool? permissive = await EvaluateLicenseAsync(id, version, ct);
 
-                // Old package versions often predate the SPDX <license> element and only declare a
-                // licenseUrl we don't recognize. Newer versions usually declare the license properly,
-                // so fall back to the latest version's license expression.
-                if (expression is null)
+                // Old versions often predate the SPDX <license> element or declare no license at all.
+                // Newer versions usually declare it properly, so fall back to the latest version.
+                if (permissive is null)
                 {
                     string? latest = await ResolveLatestVersionAsync(id);
                     if (latest is not null && !latest.Equals(version, StringComparison.OrdinalIgnoreCase))
                     {
-                        expression = await FetchLicenseExpressionAsync(id, latest, ct);
+                        permissive = await EvaluateLicenseAsync(id, latest, ct);
                     }
                 }
 
-                return expression ?? "";
+                return (permissive ?? false) ? "1" : "0";
             });
-        return result.Length == 0 ? null : result;
-    }
+        return result == "1";
 
-    private async Task<string?> FetchLicenseExpressionAsync(string id, string version, CancellationToken ct)
-    {
-        try
+        async Task<bool?> EvaluateLicenseAsync(string id, string version, CancellationToken ct)
         {
-            var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct);
-            var metadata = await metadataResource.GetMetadataAsync(
-                new PackageIdentity(id, NuGetVersion.Parse(version)), _sourceCache, _nugetLogger, ct);
-
-            if (metadata?.LicenseMetadata is { Type: LicenseType.Expression } license)
+            LicenseMetadata? license;
+            string? licenseUrl;
+            try
             {
-                return license.License;
+                var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct);
+                var metadata = await metadataResource.GetMetadataAsync(
+                    new PackageIdentity(id, NuGetVersion.Parse(version)), _sourceCache, _nugetLogger, ct);
+                license = metadata?.LicenseMetadata;
+                licenseUrl = metadata?.LicenseUrl?.ToString();
+            }
+            catch (Exception ex)
+            {
+                await _log($"[NuGetClient] Failed to fetch license metadata for {id} {version}: {ex.Message}");
+                return null;
             }
 
-            return MapLicenseUrlToExpression(metadata?.LicenseUrl?.ToString());
+            // SPDX expression.
+            if (license is { Type: LicenseType.Expression })
+                return IsPermissiveExpression(license.License);
+
+            // License file embedded in the package - match its text against known license formats.
+            if (license is { Type: LicenseType.File })
+                return await IsPermissiveLicenseFileAsync(id, version, license.License, ct);
+
+            // licenseUrl: map well-known URLs, otherwise fetch the content and match it.
+            if (!string.IsNullOrEmpty(licenseUrl))
+            {
+                string? mapped = MapLicenseUrlToExpression(licenseUrl);
+                if (mapped is not null)
+                    return IsPermissiveExpression(mapped);
+
+                string? text = await TryFetchTextAsync(licenseUrl, ct);
+                return text is null ? null : IsPermissiveExpression(DetectLicenseId(text));
+            }
+
+            return null;
         }
-        catch (Exception ex)
+
+        async Task<bool?> IsPermissiveLicenseFileAsync(string id, string version, string licenseFilePath, CancellationToken ct)
         {
-            await _log($"[NuGetClient] Failed to fetch license for {id} {version}: {ex.Message}");
+            try
+            {
+                byte[]? nupkg = await DownloadNupkgAsync(id, version);
+                if (nupkg is null)
+                    return null;
+
+                using var reader = new PackageArchiveReader(new MemoryStream(nupkg));
+                string normalized = licenseFilePath.Replace('\\', '/');
+                string? entry = reader.GetFiles().FirstOrDefault(f => f.Equals(normalized, StringComparison.OrdinalIgnoreCase));
+                if (entry is null)
+                    return null;
+
+                using var stream = reader.GetStream(entry);
+                using var streamReader = new StreamReader(stream);
+                string text = await streamReader.ReadToEndAsync(ct);
+                return IsPermissiveExpression(DetectLicenseId(text));
+            }
+            catch (Exception ex)
+            {
+                await _log($"[NuGetClient] Failed to read license file for {id} {version}: {ex.Message}");
+                return null;
+            }
+        }
+
+        async Task<string?> TryFetchTextAsync(string url, CancellationToken ct)
+        {
+            return await _cache.GetOrCreateAsync(
+                $"license-text:{url.ToLowerInvariant()}",
+                async ct =>
+                {
+                    using var client = new HttpClient();
+                    client.DefaultRequestVersion = HttpVersion.Version20;
+                    client.Timeout = TimeSpan.FromSeconds(20);
+                    client.MaxResponseContentBufferSize = 1024 * 1024; // 1 MB
+
+                    try
+                    {
+                        return await client.GetStringAsync(url, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        await _log($"[NuGetClient] Failed to fetch license URL {url}: {ex.Message}");
+                        return null;
+                    }
+                },
+                cancellationToken: ct);
+        }
+
+        static string? MapLicenseUrlToExpression(string? licenseUrl)
+        {
+            if (string.IsNullOrEmpty(licenseUrl))
+                return null;
+
+            const string NuGetLicensePrefix = "https://licenses.nuget.org/";
+            if (licenseUrl.StartsWith(NuGetLicensePrefix, StringComparison.OrdinalIgnoreCase))
+                return Uri.UnescapeDataString(licenseUrl[NuGetLicensePrefix.Length..]);
+
+            // dotnet org repositories (corefx/coreclr/runtime/...) are MIT-licensed.
+            if (licenseUrl.Contains("github.com/dotnet/", StringComparison.OrdinalIgnoreCase) ||
+                licenseUrl.Contains("raw.githubusercontent.com/dotnet/", StringComparison.OrdinalIgnoreCase))
+                return "MIT";
+
+            if (licenseUrl.Contains("apache.org/licenses/LICENSE-2.0", StringComparison.OrdinalIgnoreCase))
+                return "Apache-2.0";
+
+            // opensource.org/licenses/<slug>, where slug may carry a file extension (e.g. mit-license.php).
+            const string OpenSourcePrefix = "opensource.org/licenses/";
+            int index = licenseUrl.IndexOf(OpenSourcePrefix, StringComparison.OrdinalIgnoreCase);
+            if (index >= 0)
+            {
+                string slug = licenseUrl[(index + OpenSourcePrefix.Length)..];
+                int end = slug.IndexOfAny(['/', '?', '#']);
+                if (end >= 0)
+                    slug = slug[..end];
+
+                int dot = slug.LastIndexOf('.');
+                if (dot > 0 && slug[(dot + 1)..].ToLowerInvariant() is "php" or "html" or "htm" or "txt")
+                    slug = slug[..dot];
+
+                return NormalizeLegacyLicenseSlug(slug);
+            }
+
+            return null;
+
+            static string? NormalizeLegacyLicenseSlug(string slug)
+            {
+                if (slug.Length == 0)
+                    return null;
+
+                return slug.ToLowerInvariant() switch
+                {
+                    "mit-license" or "mit" => "MIT",
+                    "ms-pl" => "MS-PL",
+                    "bsd-license" or "bsd" or "bsd-3-clause" => "BSD-3-Clause",
+                    "bsd-2-clause" => "BSD-2-Clause",
+                    "apache-2.0" or "apache2.0" or "apache-license-2.0" => "Apache-2.0",
+                    _ => slug, // assume already an SPDX identifier
+                };
+            }
+        }
+
+        static string? DetectLicenseId(string text)
+        {
+            text = Regex.Replace(text, @"\s+", " ").Trim().Replace('\u201C', '"').Replace('\u201D', '"');
+
+            foreach (string marker in s_nonPermissiveMarkers)
+            {
+                if (text.Contains(marker, StringComparison.OrdinalIgnoreCase))
+                    return null;
+            }
+
+            // MIT / X11 / Expat: permission grant + canonical rights + the "as is" warranty disclaimer.
+            if (text.Contains("permission is hereby granted, free of charge", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("to deal in the software without restriction", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("the software is provided \"as is\"", StringComparison.OrdinalIgnoreCase))
+                return "MIT";
+
+            // BSD 2-/3-clause: redistribution grant + warranty disclaimer (advertising clause excluded above).
+            if (text.Contains("redistribution and use in source and binary forms", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("this software is provided", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("as is", StringComparison.OrdinalIgnoreCase))
+                return text.Contains("neither the name", StringComparison.OrdinalIgnoreCase) ? "BSD-3-Clause" : "BSD-2-Clause";
+
+            // Apache 2.0: the actual license body, not merely a mention of it.
+            if (text.Contains("apache license", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("version 2.0", StringComparison.OrdinalIgnoreCase) &&
+                (text.Contains("terms and conditions for use, reproduction, and distribution", StringComparison.OrdinalIgnoreCase) ||
+                 text.Contains("you may not use this file except in compliance with the license", StringComparison.OrdinalIgnoreCase)))
+                return "Apache-2.0";
+
+            // ISC: distinctive permission grant + warranty disclaimer.
+            if (text.Contains("permission to use, copy, modify, and/or distribute this software for any purpose", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("the software is provided \"as is\"", StringComparison.OrdinalIgnoreCase))
+                return "ISC";
+
+            if (text.Contains("boost software license", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("permission is hereby granted", StringComparison.OrdinalIgnoreCase))
+                return "BSL-1.0";
+
+            if (text.Contains("microsoft public license", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("(ms-pl)", StringComparison.OrdinalIgnoreCase))
+                return "MS-PL";
+
+            // The opening sentence is globally unique to the Unlicense; no other license uses it.
+            if (text.Contains("this is free and unencumbered software released into the public domain", StringComparison.OrdinalIgnoreCase))
+                return "Unlicense";
+
+            if (text.Contains("this software is provided 'as-is'", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("altered source versions must be plainly marked", StringComparison.OrdinalIgnoreCase))
+                return "Zlib";
+
+            if (text.Contains("mulan permissive software license", StringComparison.OrdinalIgnoreCase))
+                return "MulanPSL-2.0";
+
+            if (text.Contains("do what the f", StringComparison.OrdinalIgnoreCase) &&
+                text.Contains("you want to public license", StringComparison.OrdinalIgnoreCase))
+                return "WTFPL";
+
             return null;
         }
     }
 
-    /// <summary>
-    /// Maps a legacy <c>licenseUrl</c> (used before the SPDX <c>&lt;license&gt;</c> element) to an SPDX
-    /// expression for well-known cases. Older corefx-era System.* packages, in particular, point at a
-    /// GitHub LICENSE file rather than declaring an expression.
-    /// </summary>
-    private static string? MapLicenseUrlToExpression(string? licenseUrl)
-    {
-        if (string.IsNullOrEmpty(licenseUrl))
-            return null;
-
-        const string NuGetLicensePrefix = "https://licenses.nuget.org/";
-        if (licenseUrl.StartsWith(NuGetLicensePrefix, StringComparison.OrdinalIgnoreCase))
-            return Uri.UnescapeDataString(licenseUrl[NuGetLicensePrefix.Length..]);
-
-        // dotnet org repositories (corefx/coreclr/runtime/...) are MIT-licensed.
-        if (licenseUrl.Contains("github.com/dotnet/", StringComparison.OrdinalIgnoreCase) ||
-            licenseUrl.Contains("raw.githubusercontent.com/dotnet/", StringComparison.OrdinalIgnoreCase))
-            return "MIT";
-
-        if (licenseUrl.Contains("apache.org/licenses/LICENSE-2.0", StringComparison.OrdinalIgnoreCase))
-            return "Apache-2.0";
-
-        // opensource.org/licenses/<SPDX-id>
-        const string OpenSourcePrefix = "opensource.org/licenses/";
-        int index = licenseUrl.IndexOf(OpenSourcePrefix, StringComparison.OrdinalIgnoreCase);
-        if (index >= 0)
-        {
-            string identifier = licenseUrl[(index + OpenSourcePrefix.Length)..];
-            int end = identifier.IndexOfAny(['/', '?', '#']);
-            if (end >= 0)
-                identifier = identifier[..end];
-            if (identifier.Length > 0)
-                return identifier;
-        }
-
-        return null;
-    }
-
-    public static bool IsPermissiveLicense(string? expression)
+    private static bool IsPermissiveExpression(string? expression)
     {
         if (string.IsNullOrWhiteSpace(expression))
             return false;
@@ -336,8 +504,7 @@ internal sealed class NuGetClient
 
             if (!skipLicenseCheck && !frameworkProvided)
             {
-                string? license = await GetLicenseExpressionAsync(package.Id, version);
-                if (!IsPermissiveLicense(license))
+                if (!await IsPermissivelyLicensedAsync(package.Id, version))
                     return null;
             }
 

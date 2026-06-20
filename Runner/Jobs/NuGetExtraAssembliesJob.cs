@@ -61,7 +61,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         }
 
         var runtimeTask = BuildRuntimeAsync();
-        var approvedPackages = await GatherNuGetInfoAsync(packageCount * 3); // 3x to compensate for packages we'll rule out later
+        var approvedPackages = await GatherNuGetInfoAsync(packageCount * 2); // 2x to compensate for packages we'll rule out later
         await runtimeTask;
 
         await ProcessApprovedPackagesAsync(approvedPackages, packageCount);
@@ -115,10 +115,9 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             bool isExtra = ExtraPackages.Contains(id);
             if (!isExtra)
             {
-                string? license = await _nuget.GetLicenseExpressionAsync(id, version);
-                if (!NuGetClient.IsPermissiveLicense(license))
+                if (!await _nuget.IsPermissivelyLicensedAsync(id, version))
                 {
-                    await LogAsync($"{prefix} - skipped (license: {license ?? "none"})");
+                    await LogAsync($"{prefix} - skipped (non-permissive license)");
                     skippedLicense++;
                     continue;
                 }
