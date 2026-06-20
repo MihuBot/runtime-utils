@@ -57,7 +57,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         if (!TryGetArgument("count", out int packageCount) || packageCount <= 0)
         {
-            packageCount = 1000;
+            packageCount = 500;
         }
 
         var runtimeTask = BuildRuntimeAsync();
@@ -215,10 +215,9 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         string diffOutputDir = "nuget-diff-temp";
         Directory.CreateDirectory(diffOutputDir);
 
-        int memoryParallelism = OnRamDisk ? (int)(GetRemainingSystemMemoryGB() / 2.6) : GetRemainingSystemMemoryGB() * 2;
-        int parallelism = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), approvedPackages.Count);
+        int parallelism = Math.Min(Math.Min(Environment.ProcessorCount, GetRemainingSystemMemoryGB() * 2), approvedPackages.Count);
         parallelism = Math.Max(parallelism, 1);
-        await LogAsync($"Running JIT diffs with parallelism {parallelism} (memory parallelism {memoryParallelism})");
+        await LogAsync($"Running JIT diffs with parallelism {parallelism}");
 
         var countdown = new CountdownEvent(parallelism);
 
@@ -232,14 +231,15 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             await Parallel.ForAsync(0, parallelism, async (index, ct) =>
             {
                 string coreRoot = "artifacts-main";
-                string checkedClr = "clr-checked-main";
+                const string CheckedClr = "clr-checked-main";
 
                 if (index > 0)
                 {
+                    // jit-diff only reads the base JIT from CheckedClr, so every worker shares one copy.
+                    // Only the core_root is mutated (jit-diff installs the JIT into it in place), so give
+                    // each worker a cheap linked clone with a private copy of just the JIT.
                     coreRoot = $"{coreRoot}_{index}";
-                    checkedClr = $"{checkedClr}_{index}";
-                    CopyDirectory("artifacts-main", coreRoot);
-                    CopyDirectory("clr-checked-main", checkedClr);
+                    JitDiffUtils.CreateCoreRootCloneForJitDiff("artifacts-main", coreRoot);
                 }
 
                 countdown.Signal();
@@ -293,7 +293,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                                     using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                                     cts.CancelAfter(TimeSpan.FromMinutes(5));
 
-                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id, cancellationToken: cts.Token);
+                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, CheckedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id, cancellationToken: cts.Token);
                                 }
                             }
                             catch
@@ -321,7 +321,6 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                     if (index > 0)
                     {
                         DeleteDirectory(coreRoot);
-                        DeleteDirectory(checkedClr);
                     }
                 }
             });

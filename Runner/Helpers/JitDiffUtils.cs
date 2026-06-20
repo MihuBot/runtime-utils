@@ -4,6 +4,39 @@ namespace Runner.Helpers;
 
 internal static partial class JitDiffUtils
 {
+    // Files inside a core_root that jit-diff overwrites in place when it installs the base/diff JIT
+    // (see jitutils PmiDiffTool.InstallBaseJit/InstallDiffJit/RestoreDefaultJit). Each parallel jit-diff
+    // worker therefore needs its own writable copy of these; everything else in the core_root is only
+    // read while diffing and can be shared between workers via hard links.
+    private static readonly HashSet<string> s_jitDiffMutatedCoreRootFiles = new(StringComparer.OrdinalIgnoreCase) { "libclrjit.so", "clrjit.dll" };
+
+    /// <summary>
+    /// Creates a lightweight per-worker clone of a core_root for running jit-diff in parallel.
+    /// The bulk of the (multi-hundred-MB) shared framework is shared with <paramref name="source"/> via
+    /// links - a single physical copy on disk - while the JIT libraries that jit-diff overwrites in
+    /// place are given to the worker as private, writable copies. This avoids duplicating the whole
+    /// core_root for every parallel invocation.
+    /// </summary>
+    public static void CreateCoreRootCloneForJitDiff(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+
+        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
+        {
+            string destFile = Path.Combine(destination, Path.GetRelativePath(source, file));
+            Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+
+            if (s_jitDiffMutatedCoreRootFiles.Contains(Path.GetFileName(file)))
+            {
+                File.Copy(file, destFile, overwrite: true);
+            }
+            else
+            {
+                File.CreateSymbolicLink(destFile, file);
+            }
+        }
+    }
+
     public static async Task RunJitDiffOnFrameworksAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder)
     {
         await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, "--frameworks");

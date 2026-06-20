@@ -416,25 +416,23 @@ internal sealed class JitDiffJob : JobBase
                 return;
             }
 
-            int memoryParallelism = OnRamDisk ? (int)(memoryAvailableGB / 2.6) : memoryAvailableGB * 2;
-            int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), projectDirs.Count);
-            coreRootCopies = Math.Max(coreRootCopies / 2, 1); // / 2 because we run for main and pr in parallel
-            await LogAsync($"Running JIT diffs with parallelism {coreRootCopies} (memory parallelism {memoryParallelism})");
+            int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount, memoryAvailableGB * 2), projectDirs.Count);
+            coreRootCopies = Math.Max(coreRootCopies / 2 + 1, 1); // / 2 because we run for main and pr in parallel
+            await LogAsync($"Running JIT diffs with parallelism {coreRootCopies}");
 
             var countdown = new CountdownEvent(coreRootCopies);
 
             await Parallel.ForAsync(0, coreRootCopies, async (index, _) =>
             {
                 string newCoreRootFolder = coreRootFolder;
-                string newCheckedClrFolder = checkedClrFolder;
 
                 if (index > 0)
                 {
+                    // jit-diff only reads the base JIT from checkedClrFolder, so every worker shares one
+                    // copy. Only the core_root is mutated (jit-diff installs the JIT into it in place), so
+                    // give each worker a cheap linked clone with a private copy of just the JIT.
                     newCoreRootFolder = $"{newCoreRootFolder}_{index}";
-                    newCheckedClrFolder = $"{newCheckedClrFolder}_{index}";
-
-                    CopyDirectory(coreRootFolder, newCoreRootFolder);
-                    CopyDirectory(checkedClrFolder, newCheckedClrFolder);
+                    JitDiffUtils.CreateCoreRootCloneForJitDiff(coreRootFolder, newCoreRootFolder);
                 }
 
                 countdown.Signal();
@@ -476,7 +474,7 @@ internal sealed class JitDiffJob : JobBase
 
                     try
                     {
-                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, newCheckedClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {Path.GetFileName(projectDir)}");
+                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, checkedClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {Path.GetFileName(projectDir)}");
                     }
                     catch (Exception ex)
                     {
@@ -487,7 +485,6 @@ internal sealed class JitDiffJob : JobBase
                 if (index > 0)
                 {
                     try { Directory.Delete(newCoreRootFolder, recursive: true); } catch { }
-                    try { Directory.Delete(newCheckedClrFolder, recursive: true); } catch { }
                 }
             });
         }
@@ -500,18 +497,6 @@ internal sealed class JitDiffJob : JobBase
             {
                 File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
             });
-        }
-    }
-
-    private static void CopyDirectory(string source, string destination)
-    {
-        Directory.CreateDirectory(destination);
-
-        foreach (string file in Directory.EnumerateFiles(source, "*", SearchOption.AllDirectories))
-        {
-            string destFile = Path.Combine(destination, Path.GetRelativePath(source, file));
-            Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
-            File.Copy(file, destFile, true);
         }
     }
 
