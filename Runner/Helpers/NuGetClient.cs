@@ -1,14 +1,20 @@
-using System.IO.Compression;
 using System.Reflection.PortableExecutable;
 using System.Text.Json.Serialization;
-using System.Xml.Linq;
 using Microsoft.Extensions.Caching.Hybrid;
+using NuGet.Common;
+using NuGet.Frameworks;
+using NuGet.Packaging;
+using NuGet.Packaging.Core;
+using NuGet.Protocol;
+using NuGet.Protocol.Core.Types;
+using NuGet.Resolver;
 using NuGet.Versioning;
 
 namespace Runner.Helpers;
 
 internal sealed class NuGetClient
 {
+    private const string NuGetFeedUrl = "https://api.nuget.org/v3/index.json";
     private const int MaxNupkgSizeBytes = 50 * 1024 * 1024;
 
     private static readonly HashSet<string> s_permissiveLicenses = new(StringComparer.OrdinalIgnoreCase)
@@ -23,12 +29,24 @@ internal sealed class NuGetClient
     private readonly string _depCacheDir;
     private readonly Func<string, Task> _log;
 
-    public NuGetClient(HttpClient httpClient, HybridCache cache, string depCacheDir, Func<string, Task> log)
+    // NuGet client resolution is delegated to the official NuGet.* libraries so that dependency and
+    // version resolution behaves exactly like a real restore (range-aware, lowest-applicable,
+    // conflict-resolved, framework-aware) instead of being approximated by hand.
+    private readonly NuGetFramework _targetFramework;
+    private readonly SourceRepository _repository;
+    private readonly SourceCacheContext _sourceCache;
+    private readonly ILogger _nugetLogger;
+
+    public NuGetClient(HttpClient httpClient, HybridCache cache, string depCacheDir, Func<string, Task> log, string targetFramework)
     {
         _httpClient = httpClient;
         _cache = cache;
         _depCacheDir = depCacheDir;
         _log = log;
+        _targetFramework = NuGetFramework.Parse(targetFramework);
+        _repository = Repository.Factory.GetCoreV3(NuGetFeedUrl);
+        _sourceCache = new SourceCacheContext();
+        _nugetLogger = new NuGetLoggerAdapter(log);
     }
 
     // === DTOs ===
@@ -47,14 +65,6 @@ internal sealed class NuGetClient
         [JsonPropertyName("version")]
         public string? Version { get; set; }
     }
-
-    private sealed class NuGetVersionIndex
-    {
-        [JsonPropertyName("versions")]
-        public string[] Versions { get; set; } = [];
-    }
-
-    public sealed record PackageDependency(string Id, string VersionRange);
 
     // === Search ===
 
@@ -98,28 +108,24 @@ internal sealed class NuGetClient
     {
         string result = await _cache.GetOrCreateAsync(
             $"license:{id.ToLowerInvariant()}:{version.ToLowerInvariant()}",
-            async ct => await FetchAsync() ?? "");
+            async ct => await FetchAsync(ct) ?? "");
         return result.Length == 0 ? null : result;
 
-        async Task<string?> FetchAsync()
+        async Task<string?> FetchAsync(CancellationToken ct)
         {
             try
             {
-                string url = $"https://api.nuget.org/v3-flatcontainer/{id.ToLowerInvariant()}/{version.ToLowerInvariant()}/{id.ToLowerInvariant()}.nuspec";
-                string nuspecXml = await _httpClient.GetStringAsync(url);
+                var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct);
+                var metadata = await metadataResource.GetMetadataAsync(
+                    new PackageIdentity(id, NuGetVersion.Parse(version)), _sourceCache, _nugetLogger, ct);
 
-                var doc = XDocument.Parse(nuspecXml);
-                XNamespace ns = doc.Root?.Name.Namespace ?? XNamespace.None;
-                var metadata = doc.Root?.Element(ns + "metadata");
-
-                var licenseElement = metadata?.Element(ns + "license");
-                if (licenseElement?.Attribute("type")?.Value?.Equals("expression", StringComparison.OrdinalIgnoreCase) == true)
+                if (metadata?.LicenseMetadata is { Type: LicenseType.Expression } license)
                 {
-                    return licenseElement.Value;
+                    return license.License;
                 }
 
                 // Fall back to licenseUrl for licenses.nuget.org URLs
-                string? licenseUrl = metadata?.Element(ns + "licenseUrl")?.Value;
+                string? licenseUrl = metadata?.LicenseUrl?.ToString();
                 if (licenseUrl is not null && licenseUrl.StartsWith("https://licenses.nuget.org/", StringComparison.OrdinalIgnoreCase))
                 {
                     return Uri.UnescapeDataString(licenseUrl["https://licenses.nuget.org/".Length..]);
@@ -153,86 +159,160 @@ internal sealed class NuGetClient
         return licenses.Count > 0 && licenses.All(l => s_permissiveLicenses.Contains(l));
     }
 
-    // === Package Download & DLL Extraction ===
+    // === Version resolution ===
+
+    public async Task<string?> ResolveLatestVersionAsync(string id)
+    {
+        string result = await _cache.GetOrCreateAsync(
+            $"latest:{id.ToLowerInvariant()}",
+            async ct => await FetchAsync(ct) ?? "");
+        return result.Length == 0 ? null : result;
+
+        async Task<string?> FetchAsync(CancellationToken ct)
+        {
+            try
+            {
+                var byIdResource = await _repository.GetResourceAsync<FindPackageByIdResource>(ct);
+                var versions = await byIdResource.GetAllVersionsAsync(id, _sourceCache, _nugetLogger, ct);
+                NuGetVersion? latest = versions.Where(v => v is not null).Max();
+                return latest?.ToNormalizedString();
+            }
+            catch (Exception ex)
+            {
+                await _log($"[NuGetClient] Failed to resolve latest version for {id}: {ex.Message}");
+                return null;
+            }
+        }
+    }
+
+    // === Dependency resolution ===
+
+    /// <summary>
+    /// Resolves all transitive dependencies of a package using NuGet's own resolver (the same logic a
+    /// restore uses): each dependency's declared version range is honoured and the lowest applicable
+    /// version is selected, with conflict resolution across the whole graph.
+    /// Returns <c>null</c> if any resolved dependency has a non-permissive license.
+    /// </summary>
+    public async Task<Dictionary<string, string>?> ResolveAllDependenciesAsync(string rootId, string rootVersion, bool skipLicenseCheck = false)
+    {
+        List<SourcePackageDependencyInfo> resolvedPackages;
+
+        try
+        {
+            var depInfoResource = await _repository.GetResourceAsync<DependencyInfoResource>();
+            var rootIdentity = new PackageIdentity(rootId, NuGetVersion.Parse(rootVersion));
+
+            var availablePackages = new HashSet<SourcePackageDependencyInfo>(PackageIdentityComparer.Default);
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootId };
+
+            // Pin the root to the requested version, then gather every candidate version of each
+            // transitive dependency so the resolver can satisfy all constraints.
+            var rootInfo = await depInfoResource.ResolvePackage(rootIdentity, _targetFramework, _sourceCache, _nugetLogger, CancellationToken.None);
+            if (rootInfo is null)
+            {
+                return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            availablePackages.Add(rootInfo);
+
+            var queue = new Queue<string>(rootInfo.Dependencies.Select(d => d.Id));
+            while (queue.Count > 0)
+            {
+                string depId = queue.Dequeue();
+                if (IsExcludedDependency(depId) || !visited.Add(depId))
+                    continue;
+
+                var infos = await depInfoResource.ResolvePackages(depId, _targetFramework, _sourceCache, _nugetLogger, CancellationToken.None);
+                foreach (var info in infos)
+                {
+                    availablePackages.Add(info);
+                    foreach (var dep in info.Dependencies)
+                        queue.Enqueue(dep.Id);
+                }
+            }
+
+            var resolverContext = new PackageResolverContext(
+                DependencyBehavior.Lowest,
+                targetIds: [rootId],
+                requiredPackageIds: [],
+                packagesConfig: [],
+                preferredVersions: [rootIdentity],
+                availablePackages: availablePackages,
+                packageSources: [_repository.PackageSource],
+                log: _nugetLogger);
+
+            resolvedPackages = new PackageResolver()
+                .Resolve(resolverContext, CancellationToken.None)
+                .Select(p => availablePackages.First(a => PackageIdentityComparer.Default.Equals(a, p)))
+                .ToList();
+        }
+        catch (Exception ex)
+        {
+            await _log($"[NuGetClient] Failed to resolve dependencies for {rootId} {rootVersion}: {ex.Message}");
+            // Proceed with just the main DLL; the diff will fail to load if a reference is missing.
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var package in resolvedPackages)
+        {
+            if (package.Id.Equals(rootId, StringComparison.OrdinalIgnoreCase) || IsExcludedDependency(package.Id))
+                continue;
+
+            string version = package.Version.ToNormalizedString();
+
+            if (!skipLicenseCheck)
+            {
+                string? license = await GetLicenseExpressionAsync(package.Id, version);
+                if (!IsPermissiveLicense(license))
+                    return null;
+            }
+
+            resolved[package.Id] = version;
+        }
+
+        return resolved;
+    }
+
+    // === Package download & DLL extraction ===
 
     public async Task<(string? Dll, string? Tfm)> DownloadAndExtractBestDllAsync(string id, string version, string extractDir)
     {
         try
         {
-            string lowerId = id.ToLowerInvariant();
-            string lowerVersion = version.ToLowerInvariant();
-            string url = $"https://api.nuget.org/v3-flatcontainer/{lowerId}/{lowerVersion}/{lowerId}.{lowerVersion}.nupkg";
-
-            using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-            response.EnsureSuccessStatusCode();
-
-            if (response.Content.Headers.ContentLength > MaxNupkgSizeBytes)
+            byte[]? nupkg = await DownloadNupkgAsync(id, version);
+            if (nupkg is null)
                 return (null, null);
 
-            string nupkgPath = Path.Combine(extractDir, $"{id}.nupkg");
-            using (var fs = File.Create(nupkgPath))
-            {
-                await response.Content.CopyToAsync(fs);
-            }
+            using var reader = new PackageArchiveReader(new MemoryStream(nupkg));
 
-            if (new FileInfo(nupkgPath).Length > MaxNupkgSizeBytes)
-            {
-                File.Delete(nupkgPath);
+            var group = SelectNearestLibGroup(reader);
+            if (group is null)
                 return (null, null);
-            }
 
-            string? dll = null;
-            string? selectedTfm = null;
+            string expectedDll = $"{id}.dll";
+            var dlls = group.Items
+                .Where(i => i.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                .ToList();
 
-            using (var archive = ZipFile.OpenRead(nupkgPath))
+            // Prefer the DLL matching the package name, fall back if there's exactly one DLL in the group.
+            string? entry = dlls.FirstOrDefault(i => Path.GetFileName(i).Equals(expectedDll, StringComparison.OrdinalIgnoreCase))
+                ?? (dlls.Count == 1 ? dlls[0] : null);
+            if (entry is null)
+                return (null, group.TargetFramework.GetShortFolderName());
+
+            string fileName = Path.GetFileName(entry);
+            string destPath = Path.Combine(extractDir, fileName);
+            ExtractEntry(reader, entry, destPath);
+
+            if (!IsManagedAssembly(destPath))
             {
-                string expectedDll = $"{id}.dll";
-
-                var allDllEntries = archive.Entries
-                    .Select(e => (Entry: e, Parts: e.FullName.Split('/')))
-                    .Where(x => x.Parts.Length == 3 &&
-                                x.Parts[0].Equals("lib", StringComparison.OrdinalIgnoreCase) &&
-                                x.Parts[2].EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
-                    .ToList();
-
-                var tfmGroups = allDllEntries
-                    .GroupBy(x => x.Parts[1])
-                    .Select(g =>
-                    {
-                        // Prefer the DLL matching the package name, fall back if there's exactly one DLL in the TFM
-                        var match = g.FirstOrDefault(x => x.Parts[2].Equals(expectedDll, StringComparison.OrdinalIgnoreCase));
-                        if (match.Entry is null && g.Count() == 1)
-                            match = g.First();
-                        return (Tfm: g.Key, Entry: match);
-                    })
-                    .Where(x => x.Entry.Entry is not null)
-                    .OrderByDescending(x => GetTfmPriority(x.Tfm))
-                    .ToList();
-
-                if (tfmGroups.Count == 0 || GetTfmPriority(tfmGroups[0].Tfm) < 0)
-                {
-                    File.Delete(nupkgPath);
-                    return (null, null);
-                }
-
-                selectedTfm = tfmGroups[0].Tfm;
-                var entry = tfmGroups[0].Entry;
-
-                string destPath = Path.Combine(extractDir, entry.Parts[2]);
-                entry.Entry.ExtractToFile(destPath, overwrite: true);
-
-                if (IsManagedAssembly(destPath))
-                {
-                    dll = entry.Parts[2];
-                }
-                else
-                {
-                    File.Delete(destPath);
-                }
+                File.Delete(destPath);
+                return (null, group.TargetFramework.GetShortFolderName());
             }
 
-            File.Delete(nupkgPath);
-            return (dll, selectedTfm);
+            return (fileName, group.TargetFramework.GetShortFolderName());
         }
         catch (Exception ex)
         {
@@ -242,8 +322,9 @@ internal sealed class NuGetClient
     }
 
     /// <summary>
-    /// Downloads a dependency package to a shared cache directory (once), then copies its DLLs to the target directory.
-    /// HybridCache prevents stampeding when multiple parallel workers need the same dependency.
+    /// Downloads a dependency package's assemblies to a shared cache directory (once), then copies its
+    /// DLLs to the target directory. HybridCache prevents stampeding when multiple parallel workers
+    /// need the same dependency.
     /// </summary>
     public async Task DownloadDependencyDllsAsync(string id, string version, string targetDir)
     {
@@ -273,60 +354,33 @@ internal sealed class NuGetClient
         {
             try
             {
-                string url = $"https://api.nuget.org/v3-flatcontainer/{lowerId}/{lowerVersion}/{lowerId}.{lowerVersion}.nupkg";
-
-                using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
-
-                if (response.Content.Headers.ContentLength > MaxNupkgSizeBytes)
+                byte[]? nupkg = await DownloadNupkgAsync(id, version);
+                if (nupkg is null)
                     return [];
 
-                string nupkgPath = Path.Combine(depCacheSubDir, $"{id}.nupkg");
-                using (var fs = File.Create(nupkgPath))
-                {
-                    await response.Content.CopyToAsync(fs);
-                }
+                using var reader = new PackageArchiveReader(new MemoryStream(nupkg));
 
-                if (new FileInfo(nupkgPath).Length > MaxNupkgSizeBytes)
-                {
-                    File.Delete(nupkgPath);
+                var group = SelectNearestLibGroup(reader);
+                if (group is null)
                     return [];
-                }
 
                 var dlls = new List<string>();
-
-                using (var archive = ZipFile.OpenRead(nupkgPath))
+                foreach (string entry in group.Items.Where(i => i.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)))
                 {
-                    var tfmGroups = archive.Entries
-                        .Select(e => (Entry: e, Parts: e.FullName.Split('/')))
-                        .Where(x => x.Parts.Length == 3 &&
-                                    x.Parts[0].Equals("lib", StringComparison.OrdinalIgnoreCase) &&
-                                    x.Parts[2].EndsWith(".dll", StringComparison.OrdinalIgnoreCase) &&
-                                    !string.IsNullOrEmpty(x.Parts[2]))
-                        .GroupBy(x => x.Parts[1])
-                        .OrderByDescending(g => GetTfmPriority(g.Key))
-                        .ToList();
+                    string fileName = Path.GetFileName(entry);
+                    string destPath = Path.Combine(depCacheSubDir, fileName);
+                    ExtractEntry(reader, entry, destPath);
 
-                    if (tfmGroups.Count > 0 && GetTfmPriority(tfmGroups[0].Key) >= 0)
+                    if (IsManagedAssembly(destPath))
                     {
-                        foreach (var entry in tfmGroups[0])
-                        {
-                            string destPath = Path.Combine(depCacheSubDir, entry.Parts[2]);
-                            entry.Entry.ExtractToFile(destPath, overwrite: true);
-
-                            if (IsManagedAssembly(destPath))
-                            {
-                                dlls.Add(entry.Parts[2]);
-                            }
-                            else
-                            {
-                                File.Delete(destPath);
-                            }
-                        }
+                        dlls.Add(fileName);
+                    }
+                    else
+                    {
+                        File.Delete(destPath);
                     }
                 }
 
-                File.Delete(nupkgPath);
                 return dlls;
             }
             catch (Exception ex)
@@ -337,172 +391,36 @@ internal sealed class NuGetClient
         }
     }
 
-    // === Dependency Resolution ===
+    // === Helpers ===
 
-    public async Task<List<PackageDependency>> GetPackageDependenciesAsync(string id, string version, string targetTfm)
+    private async Task<byte[]?> DownloadNupkgAsync(string id, string version)
     {
-        return await _cache.GetOrCreateAsync(
-            $"deps:{id.ToLowerInvariant()}:{version.ToLowerInvariant()}:{targetTfm}",
-            async ct => await FetchAsync());
+        string lowerId = id.ToLowerInvariant();
+        string lowerVersion = version.ToLowerInvariant();
+        string url = $"https://api.nuget.org/v3-flatcontainer/{lowerId}/{lowerVersion}/{lowerId}.{lowerVersion}.nupkg";
 
-        async Task<List<PackageDependency>> FetchAsync()
-        {
-            try
-            {
-                string lowerId = id.ToLowerInvariant();
-                string lowerVersion = version.ToLowerInvariant();
-                string url = $"https://api.nuget.org/v3-flatcontainer/{lowerId}/{lowerVersion}/{lowerId}.nuspec";
-                string nuspecXml = await _httpClient.GetStringAsync(url);
+        using var response = await _httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+        response.EnsureSuccessStatusCode();
 
-                var doc = XDocument.Parse(nuspecXml);
-                XNamespace ns = doc.Root?.Name.Namespace ?? XNamespace.None;
-                var metadata = doc.Root?.Element(ns + "metadata");
-                var dependencies = metadata?.Element(ns + "dependencies");
-
-                if (dependencies is null) return [];
-
-                var groups = dependencies.Elements(ns + "group").ToList();
-                XElement? selectedGroup;
-
-                if (groups.Count > 0)
-                {
-                    int targetPriority = GetTfmPriority(targetTfm);
-
-                    // Find best matching group: highest priority that doesn't exceed target
-                    selectedGroup = groups
-                        .Select(g => (Element: g, Priority: GetTfmPriority(NormalizeTfm(g.Attribute("targetFramework")?.Value))))
-                        .Where(g => g.Priority >= 0 && g.Priority <= targetPriority)
-                        .OrderByDescending(g => g.Priority)
-                        .Select(g => g.Element)
-                        .FirstOrDefault();
-
-                    // Fall back to group with no targetFramework
-                    selectedGroup ??= groups.FirstOrDefault(g => g.Attribute("targetFramework") is null);
-
-                    if (selectedGroup is null) return [];
-                }
-                else
-                {
-                    // Old format: flat list of dependencies (no groups)
-                    selectedGroup = dependencies;
-                }
-
-                return selectedGroup.Elements(ns + "dependency")
-                    .Select(d => new PackageDependency(
-                        d.Attribute("id")?.Value ?? "",
-                        d.Attribute("version")?.Value ?? ""
-                    ))
-                    .Where(d => !string.IsNullOrEmpty(d.Id))
-                    .ToList();
-            }
-            catch (Exception ex)
-            {
-                await _log($"[NuGetClient] Failed to fetch dependencies for {id} {version}: {ex.Message}");
-                return [];
-            }
-        }
-    }
-
-    public async Task<string?> ResolveLatestVersionAsync(string id)
-    {
-        string[] versions = await GetAllVersionsAsync(id);
-        return versions.Length > 0 ? versions[^1] : null;
-    }
-
-    /// <summary>
-    /// Resolves the highest available version of <paramref name="id"/> that satisfies the given NuGet
-    /// version range. Falls back to the latest version when the range is empty/unparseable or when no
-    /// available version satisfies it, preserving the previous "latest wins" behavior in those cases.
-    /// </summary>
-    public async Task<string?> ResolveBestVersionInRangeAsync(string id, string? versionRange)
-    {
-        string[] versions = await GetAllVersionsAsync(id);
-        if (versions.Length == 0)
+        if (response.Content.Headers.ContentLength > MaxNupkgSizeBytes)
             return null;
 
-        if (string.IsNullOrWhiteSpace(versionRange) || !VersionRange.TryParse(versionRange, out VersionRange? range))
-            return versions[^1];
-
-        string? bestVersion = null;
-        NuGetVersion? best = null;
-
-        foreach (string v in versions)
-        {
-            if (NuGetVersion.TryParse(v, out NuGetVersion? parsed) &&
-                range.Satisfies(parsed) &&
-                (best is null || parsed > best))
-            {
-                best = parsed;
-                bestVersion = v;
-            }
-        }
-
-        return bestVersion ?? versions[^1];
+        byte[] bytes = await response.Content.ReadAsByteArrayAsync();
+        return bytes.Length > MaxNupkgSizeBytes ? null : bytes;
     }
 
-    private async Task<string[]> GetAllVersionsAsync(string id)
+    private FrameworkSpecificGroup? SelectNearestLibGroup(PackageArchiveReader reader)
     {
-        return await _cache.GetOrCreateAsync(
-            $"versions:{id.ToLowerInvariant()}",
-            async ct => await FetchAsync());
-
-        async Task<string[]> FetchAsync()
-        {
-            try
-            {
-                string url = $"https://api.nuget.org/v3-flatcontainer/{id.ToLowerInvariant()}/index.json";
-                using var stream = await _httpClient.GetStreamAsync(url);
-                var index = await JsonSerializer.DeserializeAsync<NuGetVersionIndex>(stream);
-
-                return index?.Versions ?? [];
-            }
-            catch (Exception ex)
-            {
-                await _log($"[NuGetClient] Failed to list versions for {id}: {ex.Message}");
-                return [];
-            }
-        }
+        var group = NuGetFrameworkUtility.GetNearest(reader.GetLibItems(), _targetFramework, g => g.TargetFramework);
+        return group is null || group.TargetFramework.IsUnsupported ? null : group;
     }
 
-    /// <summary>
-    /// Resolves all transitive dependencies of a package for the given TFM.
-    /// Returns null if any dependency has a non-permissive license.
-    /// </summary>
-    public async Task<Dictionary<string, string>?> ResolveAllDependenciesAsync(string rootId, string rootVersion, string targetTfm, bool skipLicenseCheck = false)
+    private static void ExtractEntry(PackageArchiveReader reader, string entry, string destPath)
     {
-        var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootId };
-        var queue = new Queue<PackageDependency>();
-
-        foreach (var dep in await GetPackageDependenciesAsync(rootId, rootVersion, targetTfm))
-            queue.Enqueue(dep);
-
-        while (queue.Count > 0)
-        {
-            var (depId, depRange) = queue.Dequeue();
-            if (string.IsNullOrEmpty(depId) || !visited.Add(depId) || IsExcludedDependency(depId))
-                continue;
-
-            string? version = await ResolveBestVersionInRangeAsync(depId, depRange);
-            if (version is null) continue;
-
-            if (!skipLicenseCheck)
-            {
-                string? license = await GetLicenseExpressionAsync(depId, version);
-                if (!IsPermissiveLicense(license))
-                    return null;
-            }
-
-            resolved[depId] = version;
-
-            foreach (var td in await GetPackageDependenciesAsync(depId, version, targetTfm))
-                queue.Enqueue(td);
-        }
-
-        return resolved;
+        using var entryStream = reader.GetStream(entry);
+        using var fs = File.Create(destPath);
+        entryStream.CopyTo(fs);
     }
-
-    // === Helpers ===
 
     private static bool IsManagedAssembly(string path)
     {
@@ -518,44 +436,6 @@ internal sealed class NuGetClient
         }
     }
 
-    private static int GetTfmPriority(string tfm)
-    {
-        // net9.0, net8.0, etc. -> 1000+X
-        var netMatch = Regex.Match(tfm, @"^net(\d+)\.0$", RegexOptions.IgnoreCase);
-        if (netMatch.Success)
-            return 1000 + int.Parse(netMatch.Groups[1].Value);
-
-        // netcoreapp3.1, etc. -> 500+X*10+Y
-        var coreMatch = Regex.Match(tfm, @"^netcoreapp(\d+)\.(\d+)$", RegexOptions.IgnoreCase);
-        if (coreMatch.Success)
-            return 500 + int.Parse(coreMatch.Groups[1].Value) * 10 + int.Parse(coreMatch.Groups[2].Value);
-
-        // netstandard2.1, etc. -> 100+X*10+Y
-        var stdMatch = Regex.Match(tfm, @"^netstandard(\d+)\.(\d+)$", RegexOptions.IgnoreCase);
-        if (stdMatch.Success)
-            return 100 + int.Parse(stdMatch.Groups[1].Value) * 10 + int.Parse(stdMatch.Groups[2].Value);
-
-        return -1; // .NET Framework, other unknown TFMs
-    }
-
-    private static string NormalizeTfm(string? tfm)
-    {
-        if (string.IsNullOrEmpty(tfm)) return "";
-
-        string lower = tfm.ToLowerInvariant();
-        if (GetTfmPriority(lower) >= 0) return lower;
-
-        // .NETStandard,Version=v2.0 or .NETStandard2.0
-        var match = Regex.Match(tfm, @"NETStandard[,.]?\s*(?:Version\s*=\s*v)?(\d+)\.(\d+)", RegexOptions.IgnoreCase);
-        if (match.Success) return $"netstandard{match.Groups[1].Value}.{match.Groups[2].Value}";
-
-        // .NETCoreApp,Version=v3.1 or .NETCoreApp3.1
-        match = Regex.Match(tfm, @"NETCoreApp[,.]?\s*(?:Version\s*=\s*v)?(\d+)\.(\d+)", RegexOptions.IgnoreCase);
-        if (match.Success) return $"netcoreapp{match.Groups[1].Value}.{match.Groups[2].Value}";
-
-        return lower;
-    }
-
     private static bool IsExcludedDependency(string id)
     {
         return id.Equals("NETStandard.Library", StringComparison.OrdinalIgnoreCase) ||
@@ -563,4 +443,23 @@ internal sealed class NuGetClient
                id.Equals("Microsoft.NETCore.Targets", StringComparison.OrdinalIgnoreCase) ||
                id.StartsWith("runtime.", StringComparison.OrdinalIgnoreCase);
     }
+
+    internal sealed class NuGetLoggerAdapter(Func<string, Task> log) : LoggerBase
+    {
+        public override void Log(ILogMessage message)
+        {
+            if (ShouldForward(message.Level))
+            {
+                log(Format(message)).GetAwaiter().GetResult();
+            }
+        }
+
+        public override Task LogAsync(ILogMessage message) =>
+            ShouldForward(message.Level) ? log(Format(message)) : Task.CompletedTask;
+
+        private static bool ShouldForward(LogLevel level) => level >= LogLevel.Warning;
+
+        private static string Format(ILogMessage message) => $"[NuGet] {message.Level}: {message.Message}";
+    }
+
 }

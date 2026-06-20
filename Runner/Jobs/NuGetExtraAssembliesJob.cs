@@ -42,7 +42,13 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         const string DepCacheDir = "dep-cache";
         Directory.CreateDirectory(DepCacheDir);
-        _nuget = new NuGetClient(HttpClient, cache, DepCacheDir, LogAsync);
+
+        // Clone the runtime up front so NuGet packages are resolved against the framework being diffed.
+        // The runtime build (which can only start once the clone is done) then runs in parallel with
+        // gathering NuGet packages, so awaiting the clone here doesn't change the overall job time.
+        await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
+
+        _nuget = new NuGetClient(HttpClient, cache, DepCacheDir, LogAsync, $"net{DotnetHelpers.GetDotnetVersion()}.0");
 
         Directory.CreateDirectory(OutputDir);
 
@@ -64,7 +70,6 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
     private async Task BuildRuntimeAsync()
     {
-        await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
         await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
         await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
         await RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main");
@@ -128,7 +133,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 continue;
             }
 
-            var deps = await _nuget.ResolveAllDependenciesAsync(id, version, selectedTfm, skipLicenseCheck: isExtra);
+            var deps = await _nuget.ResolveAllDependenciesAsync(id, version, skipLicenseCheck: isExtra);
             if (deps is null)
             {
                 await LogAsync($"{prefix} - skipped (dependency with non-permissive license)");
