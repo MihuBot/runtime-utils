@@ -3,6 +3,7 @@ using System.Reflection.PortableExecutable;
 using System.Text.Json.Serialization;
 using System.Xml.Linq;
 using Microsoft.Extensions.Caching.Hybrid;
+using NuGet.Versioning;
 
 namespace Runner.Helpers;
 
@@ -404,12 +405,48 @@ internal sealed class NuGetClient
 
     public async Task<string?> ResolveLatestVersionAsync(string id)
     {
-        string result = await _cache.GetOrCreateAsync(
-            $"version:{id.ToLowerInvariant()}",
-            async ct => await FetchAsync() ?? "");
-        return result.Length == 0 ? null : result;
+        string[] versions = await GetAllVersionsAsync(id);
+        return versions.Length > 0 ? versions[^1] : null;
+    }
 
-        async Task<string?> FetchAsync()
+    /// <summary>
+    /// Resolves the highest available version of <paramref name="id"/> that satisfies the given NuGet
+    /// version range. Falls back to the latest version when the range is empty/unparseable or when no
+    /// available version satisfies it, preserving the previous "latest wins" behavior in those cases.
+    /// </summary>
+    public async Task<string?> ResolveBestVersionInRangeAsync(string id, string? versionRange)
+    {
+        string[] versions = await GetAllVersionsAsync(id);
+        if (versions.Length == 0)
+            return null;
+
+        if (string.IsNullOrWhiteSpace(versionRange) || !VersionRange.TryParse(versionRange, out VersionRange? range))
+            return versions[^1];
+
+        string? bestVersion = null;
+        NuGetVersion? best = null;
+
+        foreach (string v in versions)
+        {
+            if (NuGetVersion.TryParse(v, out NuGetVersion? parsed) &&
+                range.Satisfies(parsed) &&
+                (best is null || parsed > best))
+            {
+                best = parsed;
+                bestVersion = v;
+            }
+        }
+
+        return bestVersion ?? versions[^1];
+    }
+
+    private async Task<string[]> GetAllVersionsAsync(string id)
+    {
+        return await _cache.GetOrCreateAsync(
+            $"versions:{id.ToLowerInvariant()}",
+            async ct => await FetchAsync());
+
+        async Task<string[]> FetchAsync()
         {
             try
             {
@@ -417,14 +454,12 @@ internal sealed class NuGetClient
                 using var stream = await _httpClient.GetStreamAsync(url);
                 var index = await JsonSerializer.DeserializeAsync<NuGetVersionIndex>(stream);
 
-                return index?.Versions is { Length: > 0 }
-                    ? index.Versions[^1]
-                    : null;
+                return index?.Versions ?? [];
             }
             catch (Exception ex)
             {
-                await _log($"[NuGetClient] Failed to resolve latest version for {id}: {ex.Message}");
-                return null;
+                await _log($"[NuGetClient] Failed to list versions for {id}: {ex.Message}");
+                return [];
             }
         }
     }
@@ -437,18 +472,18 @@ internal sealed class NuGetClient
     {
         var resolved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { rootId };
-        var queue = new Queue<string>();
+        var queue = new Queue<PackageDependency>();
 
         foreach (var dep in await GetPackageDependenciesAsync(rootId, rootVersion, targetTfm))
-            queue.Enqueue(dep.Id);
+            queue.Enqueue(dep);
 
         while (queue.Count > 0)
         {
-            string? depId = queue.Dequeue();
+            var (depId, depRange) = queue.Dequeue();
             if (string.IsNullOrEmpty(depId) || !visited.Add(depId) || IsExcludedDependency(depId))
                 continue;
 
-            string? version = await ResolveLatestVersionAsync(depId);
+            string? version = await ResolveBestVersionInRangeAsync(depId, depRange);
             if (version is null) continue;
 
             if (!skipLicenseCheck)
@@ -461,7 +496,7 @@ internal sealed class NuGetClient
             resolved[depId] = version;
 
             foreach (var td in await GetPackageDependenciesAsync(depId, version, targetTfm))
-                queue.Enqueue(td.Id);
+                queue.Enqueue(td);
         }
 
         return resolved;
