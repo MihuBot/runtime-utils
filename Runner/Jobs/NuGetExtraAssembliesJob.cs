@@ -106,11 +106,15 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         var approvedPackages = new List<PackageInfo>();
 
-        for (int i = 0; i < packages.Count; i++)
+        int i = 0;
+
+        await Parallel.ForEachAsync(packages, new ParallelOptions { MaxDegreeOfParallelism = 4 }, async (package, _) =>
         {
-            var (id, version) = packages[i];
-            string prefix = $"[NuGet {i + 1}/{packages.Count}] {id} {version}";
-            LastProgressSummary = $"Checking NuGet package {i + 1}/{packages.Count}. Approved {approvedPackages.Count} so far.";
+            var (id, version) = package;
+            int iLocal = Interlocked.Increment(ref i);
+
+            string prefix = $"[NuGet {iLocal}/{packages.Count}] {id} {version}";
+            LastProgressSummary = $"Checking NuGet package {iLocal}/{packages.Count}. Approved {approvedPackages.Count} so far.";
 
             bool isExtra = ExtraPackages.Contains(id);
             if (!isExtra)
@@ -118,8 +122,8 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 if (!await _nuget.IsPermissivelyLicensedAsync(id, version))
                 {
                     await LogAsync($"{prefix} - skipped (non-permissive license)");
-                    skippedLicense++;
-                    continue;
+                    Interlocked.Increment(ref skippedLicense);
+                    return;
                 }
             }
 
@@ -130,23 +134,27 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             if (dll is null || selectedTfm is null)
             {
                 await LogAsync($"{prefix} - skipped (no suitable DLL)");
-                skippedNoDlls++;
+                Interlocked.Increment(ref skippedLicense);
                 DeleteDirectory(pkgDir);
-                continue;
+                return;
             }
 
             var deps = await _nuget.ResolveAllDependenciesAsync(id, version, skipLicenseCheck: isExtra);
             if (deps is null)
             {
                 await LogAsync($"{prefix} - skipped (dependency with non-permissive license)");
-                skippedLicense++;
+                Interlocked.Increment(ref skippedLicense);
                 DeleteDirectory(pkgDir);
-                continue;
+                return;
             }
 
-            approvedPackages.Add(new PackageInfo(id, version, pkgDir, dll, deps));
+            lock (approvedPackages)
+            {
+                approvedPackages.Add(new PackageInfo(id, version, pkgDir, dll, deps));
+            }
+
             await LogAsync($"{prefix} - approved ({deps.Count} deps)");
-        }
+        });
 
         await LogAsync($"Phase 1 complete: {approvedPackages.Count} approved, {skippedLicense} license, {skippedNoDlls} no DLLs");
 
@@ -155,7 +163,10 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             throw new Exception("No packages passed license and DLL checks.");
         }
 
-        return approvedPackages;
+        return packages
+            .Select(p => approvedPackages.FirstOrDefault(ap => ap.Id.Equals(p.Id, StringComparison.OrdinalIgnoreCase) && ap.Version.Equals(p.Version, StringComparison.OrdinalIgnoreCase)))
+            .Where(ap => ap is not null)
+            .ToList()!;
     }
 
     private async Task ProcessApprovedPackagesAsync(List<PackageInfo> approvedPackages, int maxPackagesToInclude)
