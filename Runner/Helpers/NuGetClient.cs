@@ -454,7 +454,11 @@ internal sealed class NuGetClient
             while (queue.Count > 0)
             {
                 string depId = queue.Dequeue();
-                if (IsExcludedDependency(depId) || !visited.Add(depId))
+                // NOTE: excluded packages (e.g. Microsoft.NETCore.Platforms, runtime.*) must still be
+                // gathered into availablePackages so the resolver can satisfy other packages' dependency
+                // edges on them; they are filtered out of the final result below. Skipping them here makes
+                // PackageResolver.Resolve throw "Unable to resolve dependency 'X'".
+                if (!visited.Add(depId))
                     continue;
 
                 var infos = await depInfoResource.ResolvePackages(depId, _targetFramework, _sourceCache, _nugetLogger, CancellationToken.None);
