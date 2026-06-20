@@ -366,11 +366,13 @@ internal sealed class NuGetClient
             string expectedDll = $"{id}.dll";
             var dlls = group.Items
                 .Where(i => i.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                .Where(i => !IsSatelliteOrLegacyAssembly(i))
                 .ToList();
 
             // Prefer the DLL matching the package name, fall back if there's exactly one DLL in the group.
             string? entry = dlls.FirstOrDefault(i => Path.GetFileName(i).Equals(expectedDll, StringComparison.OrdinalIgnoreCase))
                 ?? (dlls.Count == 1 ? dlls[0] : null);
+
             if (entry is null)
                 return (null, group.TargetFramework.GetShortFolderName());
 
@@ -492,6 +494,13 @@ internal sealed class NuGetClient
         using var entryStream = reader.GetStream(entry);
         using var fs = File.Create(destPath);
         entryStream.CopyTo(fs);
+    }
+
+    private static bool IsSatelliteOrLegacyAssembly(string path)
+    {
+        ReadOnlySpan<char> fileName = Path.GetFileName(path.AsSpan());
+        return fileName.EndsWith(".resources.dll", StringComparison.OrdinalIgnoreCase)
+            || fileName.EndsWith(".legacy.dll", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsManagedAssembly(string path)
