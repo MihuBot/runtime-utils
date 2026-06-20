@@ -20,8 +20,8 @@ internal sealed class NuGetClient
 
     private static readonly HashSet<string> s_permissiveLicenses = new(StringComparer.OrdinalIgnoreCase)
     {
-        "MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC",
-        "MS-PL", "Unlicense", "0BSD", "CC0-1.0", "Zlib",
+        "MIT", "Apache-1.1", "Apache-2.0", "BSD-1-Clause", "BSD-2-Clause", "BSD-3-Clause", "BSD-3-Clause-Clear",
+        "ISC", "MS-PL", "Unlicense", "0BSD", "CC0-1.0", "Zlib", "NCSA",
         "BSL-1.0", "PostgreSQL", "X11", "MIT-0", "WTFPL", "MulanPSL-2.0",
     };
 
