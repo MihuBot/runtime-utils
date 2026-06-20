@@ -258,6 +258,27 @@ public abstract class JobBase
         File.Delete(zipFilePath);
     }
 
+    public async Task SevenZipAndUploadArtifactAsync(string archiveFileName, string folderPath, bool maxCompression = false)
+    {
+        if (!Live)
+        {
+            return;
+        }
+
+        archiveFileName = $"{archiveFileName}.7z";
+        string archiveFilePath = Path.GetFullPath(archiveFileName);
+
+        folderPath = Path.GetFullPath(folderPath);
+
+        await LogAsync($"[{archiveFileName}] Compressing {folderPath}");
+
+        await RunProcessAsync("7z", $"a -mx{(maxCompression ? 9 : 5)} {(maxCompression ? "-md512m" : "")} {archiveFilePath} .", logPrefix: archiveFileName, workDir: folderPath, suppressOutputLogs: true);
+
+        await UploadArtifactAsync(archiveFilePath);
+
+        File.Delete(archiveFilePath);
+    }
+
     public async Task LogAsync(string message)
     {
         message = $"[{FormatElapsedTime(ElapsedTime)}] {message}";

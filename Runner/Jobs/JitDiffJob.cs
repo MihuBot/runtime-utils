@@ -133,7 +133,7 @@ internal sealed class JitDiffJob : JobBase
     {
         Task cloneRuntimeTask = RuntimeHelpers.CloneRuntimeAsync(job);
 
-        Task setupZipAndWgetTask = job.RunProcessAsync("apt-get", "install -y zip wget ninja-build", logPrefix: "Setup zip & wget");
+        Task setupZipAndWgetTask = job.RunProcessAsync("apt-get", "install -y zip wget p7zip-full ninja-build", logPrefix: "Setup zip & wget");
 
         Task setupJitutilsTask = Task.Run(async () =>
         {
@@ -368,8 +368,8 @@ internal sealed class JitDiffJob : JobBase
         }
         finally
         {
-            PendingTasks.Enqueue(ZipAndUploadArtifactAsync("jit-diffs-main", DiffsMainDirectory));
-            PendingTasks.Enqueue(ZipAndUploadArtifactAsync("jit-diffs-pr", DiffsPrDirectory));
+            PendingTasks.Enqueue(SevenZipAndUploadArtifactAsync("jit-diffs-main", DiffsMainDirectory, maxCompression: true));
+            PendingTasks.Enqueue(SevenZipAndUploadArtifactAsync("jit-diffs-pr", DiffsPrDirectory, maxCompression: true));
         }
 
         CombineAllDiffs(DiffsMainDirectory, CombinedDasmMainDirectory);
