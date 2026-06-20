@@ -368,8 +368,9 @@ internal sealed class JitDiffJob : JobBase
         }
         finally
         {
-            PendingTasks.Enqueue(SevenZipAndUploadArtifactAsync("jit-diffs-main", DiffsMainDirectory, maxCompression: true));
-            PendingTasks.Enqueue(SevenZipAndUploadArtifactAsync("jit-diffs-pr", DiffsPrDirectory, maxCompression: true));
+            int parallelism = Math.Max(1, Environment.ProcessorCount / 2 - 1);
+            PendingTasks.Enqueue(SevenZipAndUploadArtifactAsync("jit-diffs-main", DiffsMainDirectory, maxCompression: true, parallelism: parallelism));
+            PendingTasks.Enqueue(SevenZipAndUploadArtifactAsync("jit-diffs-pr", DiffsPrDirectory, maxCompression: true, parallelism: parallelism));
         }
 
         CombineAllDiffs(DiffsMainDirectory, CombinedDasmMainDirectory);

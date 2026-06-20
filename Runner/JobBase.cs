@@ -189,7 +189,7 @@ public abstract class JobBase
                 if (!PendingTasks.IsEmpty)
                 {
                     await LogAsync($"Waiting for {PendingTasks.Count} pending tasks before aborting.");
-                    await WaitForPendingTasksAsync().WaitAsync(TimeSpan.FromMinutes(1));
+                    await WaitForPendingTasksAsync().WaitAsync(TimeSpan.FromMinutes(5));
                 }
             }
             catch { }
@@ -258,7 +258,7 @@ public abstract class JobBase
         File.Delete(zipFilePath);
     }
 
-    public async Task SevenZipAndUploadArtifactAsync(string archiveFileName, string folderPath, bool maxCompression = false)
+    public async Task SevenZipAndUploadArtifactAsync(string archiveFileName, string folderPath, bool maxCompression = false, int parallelism = 1)
     {
         if (!Live)
         {
@@ -272,7 +272,7 @@ public abstract class JobBase
 
         await LogAsync($"[{archiveFileName}] Compressing {folderPath}");
 
-        await RunProcessAsync("7z", $"a -mx{(maxCompression ? 9 : 5)} {(maxCompression ? "-md512m" : "")} {archiveFilePath} .", logPrefix: archiveFileName, workDir: folderPath, suppressOutputLogs: true);
+        await RunProcessAsync("7z", $"a -mx{(maxCompression ? 8 : 5)} {(maxCompression ? "-md128m" : "")} -mmt{parallelism} {archiveFilePath} .", logPrefix: archiveFileName, workDir: folderPath, suppressOutputLogs: true);
 
         await UploadArtifactAsync(archiveFilePath);
 
