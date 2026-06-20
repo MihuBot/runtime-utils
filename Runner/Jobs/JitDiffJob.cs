@@ -101,18 +101,20 @@ internal sealed class JitDiffJob : JobBase
 
         await CloneRuntimeAndSetupToolsAsync(this);
 
+        bool uploadCoreRoot = TryGetFlag("UploadCoreRoot");
+
         bool mainAlreadyBuilt = await GitHelper.GetCurrentCommitAsync(this, "runtime") == _lastBuiltMainCommit;
 
         if (!mainAlreadyBuilt)
         {
             DeleteBuildArtifactsForMain();
 
-            await BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false);
+            await BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadCoreRoot);
         }
 
         await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
-        await BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false);
+        await BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadCoreRoot);
 
         Task downloadExtraAssemblies = DownloadExtraTestAssembliesAsync();
 
@@ -226,11 +228,11 @@ internal sealed class JitDiffJob : JobBase
 
             if (uploadArtifacts)
             {
-                job.PendingTasks.Enqueue(job.ZipAndUploadArtifactAsync($"build-artifacts-{branch}", $"artifacts-{branch}"));
+                job.PendingTasks.Enqueue(job.SevenZipAndUploadArtifactAsync($"build-artifacts-{branch}", $"artifacts-{branch}"));
 
                 if (buildChecked)
                 {
-                    job.PendingTasks.Enqueue(job.ZipAndUploadArtifactAsync($"build-clr-checked-{branch}", $"clr-checked-{branch}"));
+                    job.PendingTasks.Enqueue(job.SevenZipAndUploadArtifactAsync($"build-clr-checked-{branch}", $"clr-checked-{branch}"));
                 }
             }
 
