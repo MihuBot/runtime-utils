@@ -9,14 +9,14 @@ internal static partial class JitDiffUtils
         await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, "--frameworks");
     }
 
-    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null)
+    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfZero(assemblyPaths.Length);
 
-        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix);
+        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, cancellationToken);
     }
 
-    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null)
+    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, CancellationToken cancellationToken = default)
     {
         bool useCctors = !job.TryGetFlag("nocctors");
         bool useTier0 = job.TryGetFlag("tier0");
@@ -50,7 +50,8 @@ internal static partial class JitDiffUtils
             $"--core_root {coreRootFolder} " +
             $"--base {checkedClrFolder}",
             logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
-            envVars: envVars);
+            envVars: envVars,
+            cancellationToken: cancellationToken);
     }
 
     public static async Task<string> RunJitAnalyzeAsync(JobBase job, string mainDirectory, string prDirectory, int count = 100)

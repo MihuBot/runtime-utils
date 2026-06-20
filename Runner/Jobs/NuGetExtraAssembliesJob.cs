@@ -108,7 +108,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         int i = 0;
 
-        await Parallel.ForEachAsync(packages, new ParallelOptions { MaxDegreeOfParallelism = 4 }, async (package, _) =>
+        await Parallel.ForEachAsync(packages, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount / 4 }, async (package, _) =>
         {
             var (id, version) = package;
             int iLocal = Interlocked.Increment(ref i);
@@ -227,7 +227,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
 
         try
         {
-            await Parallel.ForAsync(0, parallelism, async (index, _) =>
+            await Parallel.ForAsync(0, parallelism, async (index, ct) =>
             {
                 string coreRoot = "artifacts-main";
                 string checkedClr = "clr-checked-main";
@@ -288,7 +288,10 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                             {
                                 for (int i = 0; i < 3; i++)
                                 {
-                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id);
+                                    using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                                    cts.CancelAfter(TimeSpan.FromMinutes(5));
+
+                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, checkedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id, cancellationToken: cts.Token);
                                 }
                             }
                             catch
