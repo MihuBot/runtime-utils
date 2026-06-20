@@ -205,9 +205,11 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         string diffOutputDir = "nuget-diff-temp";
         Directory.CreateDirectory(diffOutputDir);
 
-        int memoryParallelism = OnRamDisk ? (int)(GetRemainingSystemMemoryGB() / 2.5) : GetRemainingSystemMemoryGB() * 2;
+        int memoryParallelism = OnRamDisk ? (int)(GetRemainingSystemMemoryGB() / 2.3) : GetRemainingSystemMemoryGB() * 2;
         int parallelism = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), approvedPackages.Count);
         parallelism = Math.Max(parallelism, 1);
+        var countdown = new CountdownEvent(parallelism);
+
         var packageQueue = new Queue<PackageInfo>(
             approvedPackages.OrderByDescending(p => new FileInfo(Path.Combine(p.PkgDir, p.Dll)).Length));
 
@@ -217,10 +219,19 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         {
             await Parallel.ForAsync(0, parallelism, async (index, _) =>
             {
-                string coreRoot = $"artifacts-main_{index}";
-                string checkedClr = $"clr-checked-main_{index}";
-                CopyDirectory("artifacts-main", coreRoot);
-                CopyDirectory("clr-checked-main", checkedClr);
+                string coreRoot = "artifacts-main";
+                string checkedClr = "clr-checked-main";
+
+                if (index > 0)
+                {
+                    coreRoot = $"{coreRoot}_{index}";
+                    checkedClr = $"{checkedClr}_{index}";
+                    CopyDirectory("artifacts-main", coreRoot);
+                    CopyDirectory("clr-checked-main", checkedClr);
+                }
+
+                countdown.Signal();
+                countdown.Wait(JobTimeout);
 
                 try
                 {
@@ -292,8 +303,11 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                 }
                 finally
                 {
-                    DeleteDirectory(coreRoot);
-                    DeleteDirectory(checkedClr);
+                    if (index > 0)
+                    {
+                        DeleteDirectory(coreRoot);
+                        DeleteDirectory(checkedClr);
+                    }
                 }
             });
         }

@@ -413,7 +413,7 @@ internal sealed class JitDiffJob : JobBase
                 return;
             }
 
-            int memoryParallelism = OnRamDisk ? (int)(memoryAvailableGB / 2.5) : memoryAvailableGB * 2;
+            int memoryParallelism = OnRamDisk ? (int)(memoryAvailableGB / 2.3) : memoryAvailableGB * 2;
             int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount, memoryParallelism), projectDirs.Count);
             coreRootCopies = Math.Max(coreRootCopies / 2, 1); // / 2 because we run for main and pr in parallel
             var countdown = new CountdownEvent(coreRootCopies);
