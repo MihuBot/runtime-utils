@@ -29,6 +29,7 @@ internal sealed class NuGetClient
     private readonly HybridCache _cache;
     private readonly string _depCacheDir;
     private readonly Func<string, Task> _log;
+    private readonly Func<string, bool> _isFrameworkProvidedPackage;
 
     // NuGet client resolution is delegated to the official NuGet.* libraries so that dependency and
     // version resolution behaves exactly like a real restore (range-aware, lowest-applicable,
@@ -38,12 +39,14 @@ internal sealed class NuGetClient
     private readonly SourceCacheContext _sourceCache;
     private readonly ILogger _nugetLogger;
 
-    public NuGetClient(HttpClient httpClient, HybridCache cache, string depCacheDir, Func<string, Task> log, string targetFramework)
+    public NuGetClient(HttpClient httpClient, HybridCache cache, string depCacheDir, Func<string, Task> log, string targetFramework,
+        Func<string, bool> isFrameworkProvidedPackage)
     {
         _httpClient = httpClient;
         _cache = cache;
         _depCacheDir = depCacheDir;
         _log = log;
+        _isFrameworkProvidedPackage = isFrameworkProvidedPackage;
         _targetFramework = NuGetFramework.Parse(targetFramework);
         _repository = Repository.Factory.GetCoreV3(NuGetFeedUrl);
         _sourceCache = new SourceCacheContext();
@@ -109,36 +112,85 @@ internal sealed class NuGetClient
     {
         string result = await _cache.GetOrCreateAsync(
             $"license:{id.ToLowerInvariant()}:{version.ToLowerInvariant()}",
-            async ct => await FetchAsync(ct) ?? "");
+            async ct =>
+            {
+                string? expression = await FetchLicenseExpressionAsync(id, version, ct);
+
+                // Old package versions often predate the SPDX <license> element and only declare a
+                // licenseUrl we don't recognize. Newer versions usually declare the license properly,
+                // so fall back to the latest version's license expression.
+                if (expression is null)
+                {
+                    string? latest = await ResolveLatestVersionAsync(id);
+                    if (latest is not null && !latest.Equals(version, StringComparison.OrdinalIgnoreCase))
+                    {
+                        expression = await FetchLicenseExpressionAsync(id, latest, ct);
+                    }
+                }
+
+                return expression ?? "";
+            });
         return result.Length == 0 ? null : result;
+    }
 
-        async Task<string?> FetchAsync(CancellationToken ct)
+    private async Task<string?> FetchLicenseExpressionAsync(string id, string version, CancellationToken ct)
+    {
+        try
         {
-            try
-            {
-                var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct);
-                var metadata = await metadataResource.GetMetadataAsync(
-                    new PackageIdentity(id, NuGetVersion.Parse(version)), _sourceCache, _nugetLogger, ct);
+            var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct);
+            var metadata = await metadataResource.GetMetadataAsync(
+                new PackageIdentity(id, NuGetVersion.Parse(version)), _sourceCache, _nugetLogger, ct);
 
-                if (metadata?.LicenseMetadata is { Type: LicenseType.Expression } license)
-                {
-                    return license.License;
-                }
-
-                // Fall back to licenseUrl for licenses.nuget.org URLs
-                string? licenseUrl = metadata?.LicenseUrl?.ToString();
-                if (licenseUrl is not null && licenseUrl.StartsWith("https://licenses.nuget.org/", StringComparison.OrdinalIgnoreCase))
-                {
-                    return Uri.UnescapeDataString(licenseUrl["https://licenses.nuget.org/".Length..]);
-                }
-            }
-            catch (Exception ex)
+            if (metadata?.LicenseMetadata is { Type: LicenseType.Expression } license)
             {
-                await _log($"[NuGetClient] Failed to fetch license for {id} {version}: {ex.Message}");
+                return license.License;
             }
 
+            return MapLicenseUrlToExpression(metadata?.LicenseUrl?.ToString());
+        }
+        catch (Exception ex)
+        {
+            await _log($"[NuGetClient] Failed to fetch license for {id} {version}: {ex.Message}");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Maps a legacy <c>licenseUrl</c> (used before the SPDX <c>&lt;license&gt;</c> element) to an SPDX
+    /// expression for well-known cases. Older corefx-era System.* packages, in particular, point at a
+    /// GitHub LICENSE file rather than declaring an expression.
+    /// </summary>
+    private static string? MapLicenseUrlToExpression(string? licenseUrl)
+    {
+        if (string.IsNullOrEmpty(licenseUrl))
+            return null;
+
+        const string NuGetLicensePrefix = "https://licenses.nuget.org/";
+        if (licenseUrl.StartsWith(NuGetLicensePrefix, StringComparison.OrdinalIgnoreCase))
+            return Uri.UnescapeDataString(licenseUrl[NuGetLicensePrefix.Length..]);
+
+        // dotnet org repositories (corefx/coreclr/runtime/...) are MIT-licensed.
+        if (licenseUrl.Contains("github.com/dotnet/", StringComparison.OrdinalIgnoreCase) ||
+            licenseUrl.Contains("raw.githubusercontent.com/dotnet/", StringComparison.OrdinalIgnoreCase))
+            return "MIT";
+
+        if (licenseUrl.Contains("apache.org/licenses/LICENSE-2.0", StringComparison.OrdinalIgnoreCase))
+            return "Apache-2.0";
+
+        // opensource.org/licenses/<SPDX-id>
+        const string OpenSourcePrefix = "opensource.org/licenses/";
+        int index = licenseUrl.IndexOf(OpenSourcePrefix, StringComparison.OrdinalIgnoreCase);
+        if (index >= 0)
+        {
+            string identifier = licenseUrl[(index + OpenSourcePrefix.Length)..];
+            int end = identifier.IndexOfAny(['/', '?', '#']);
+            if (end >= 0)
+                identifier = identifier[..end];
+            if (identifier.Length > 0)
+                return identifier;
+        }
+
+        return null;
     }
 
     public static bool IsPermissiveLicense(string? expression)
@@ -277,7 +329,12 @@ internal sealed class NuGetClient
 
             string version = package.Version.ToNormalizedString();
 
-            if (!skipLicenseCheck)
+            // Dependencies whose assembly is provided by the shared framework (in core_root) are dropped
+            // before diffing, so they are never redistributed and their license is irrelevant. Skipping
+            // them also avoids false negatives from old framework packages with legacy license metadata.
+            bool frameworkProvided = _isFrameworkProvidedPackage(package.Id);
+
+            if (!skipLicenseCheck && !frameworkProvided)
             {
                 string? license = await GetLicenseExpressionAsync(package.Id, version);
                 if (!IsPermissiveLicense(license))

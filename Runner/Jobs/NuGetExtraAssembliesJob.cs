@@ -48,7 +48,10 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
         // gathering NuGet packages, so awaiting the clone here doesn't change the overall job time.
         await JitDiffJob.CloneRuntimeAndSetupToolsAsync(this);
 
-        _nuget = new NuGetClient(HttpClient, cache, DepCacheDir, LogAsync, $"net{DotnetHelpers.GetDotnetVersion()}.0");
+        _nuget = new NuGetClient(HttpClient, cache, DepCacheDir, LogAsync, $"net{DotnetHelpers.GetDotnetVersion()}.0",
+            // A dependency is provided by the shared framework if its assembly is already in core_root.
+            // Such dependencies are dropped before diffing, so their license never needs checking.
+            isFrameworkProvidedPackage: id => File.Exists(Path.Combine("artifacts-main", $"{id}.dll")));
 
         Directory.CreateDirectory(OutputDir);
 
