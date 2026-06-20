@@ -5,6 +5,7 @@ using NuGet.Common;
 using NuGet.Frameworks;
 using NuGet.Packaging;
 using NuGet.Packaging.Core;
+using NuGet.Packaging.Licenses;
 using NuGet.Protocol;
 using NuGet.Protocol.Core.Types;
 using NuGet.Resolver;
@@ -145,18 +146,32 @@ internal sealed class NuGetClient
         if (string.IsNullOrWhiteSpace(expression))
             return false;
 
-        // Strip exception clauses: "Apache-2.0 WITH LLVM-exception" -> "Apache-2.0"
-        expression = Regex.Replace(expression, @"\bWITH\s+\S+", "", RegexOptions.IgnoreCase);
+        try
+        {
+            return IsPermissive(NuGetLicenseExpression.Parse(expression));
+        }
+        catch (NuGetLicenseExpressionParsingException)
+        {
+            return false;
+        }
 
-        // Extract license identifiers, skipping operators and parens
-        var licenses = Regex.Split(expression, @"[\s()]+")
-            .Where(t => !string.IsNullOrWhiteSpace(t))
-            .Where(t => !t.Equals("OR", StringComparison.OrdinalIgnoreCase))
-            .Where(t => !t.Equals("AND", StringComparison.OrdinalIgnoreCase))
-            .Select(t => t.TrimEnd('+'))
-            .ToList();
+        static bool IsPermissive(NuGetLicenseExpression expression)
+        {
+            if (!System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack())
+                return false;
 
-        return licenses.Count > 0 && licenses.All(l => s_permissiveLicenses.Contains(l));
+            return expression switch
+            {
+                // A leaf license is permissive if its SPDX identifier is in the allow-list.
+                NuGetLicense license => s_permissiveLicenses.Contains(license.Identifier),
+                // "license WITH exception" only grants additional rights, so judge by the base license.
+                WithOperator withOperator => IsPermissive(withOperator.License),
+                // "A AND B" requires complying with both; "A OR B" lets the consumer pick either.
+                LogicalOperator { LogicalOperatorType: LogicalOperatorType.And } and => IsPermissive(and.Left) && IsPermissive(and.Right),
+                LogicalOperator { LogicalOperatorType: LogicalOperatorType.Or } or => IsPermissive(or.Left) || IsPermissive(or.Right),
+                _ => false,
+            };
+        }
     }
 
     // === Version resolution ===
