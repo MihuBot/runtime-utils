@@ -80,7 +80,6 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
             await RunProcessAsync("git", $"clone --no-tags --depth=1 -b {branch} --progress https://github.com/{repo} performance", logPrefix: "Clone performance");
 
-            if (TryGetFlag("medium") || TryGetFlag("long"))
             {
                 string? path = Directory.EnumerateFiles("performance", "*.cs", SearchOption.AllDirectories)
                     .FirstOrDefault(f => f.EndsWith("RecommendedConfig.cs", StringComparison.Ordinal));
@@ -91,22 +90,55 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                 }
                 else
                 {
-                    string jobType = $"Job.{(TryGetFlag("medium") ? "Medium" : "Long")}Run";
-
                     string source = File.ReadAllText(path);
 
-                    // https://github.com/dotnet/performance/blob/d76d845972c2a231f31e88802457d8aaf7263a5b/src/harness/BenchmarkDotNet.Extensions/RecommendedConfig.cs#L53
-                    string newSource = source.Replace(".AddJob(job", $".AddJob((job.ToString().Length >= 0 ? {jobType} : job)", StringComparison.Ordinal);
+                    // Disable BenchmarkDotNet's parallel build of the generated benchmark host projects.
+                    // Every generated host project has a ProjectReference to the shared MicroBenchmarks project,
+                    // whose assembly is post-processed by BDN's MSBuild weaver (BenchmarkDotNet.Weaver) to add
+                    // [MethodImpl(MethodImplOptions.NoInlining)] to every [Benchmark] method. We always build at
+                    // least two partitions (e.g. one per corerun we compare), and BDN builds partitions in
+                    // parallel by default. Concurrent builds race on the shared project's intermediate assembly,
+                    // which makes the weaver fail (it only logs a warning because we set TreatWarningsAsErrors to
+                    // false above) and leaves an un-woven assembly behind. That assembly later fails the run with
+                    // "Benchmark method `X` does not have MethodImplOptions.NoInlining flag set." Building the
+                    // partitions sequentially avoids the race.
+                    {
+                        const string Marker = "ManualConfig.CreateEmpty()";
+                        string newSource = source.Replace(
+                            Marker,
+                            $"{Marker}.WithOption(BenchmarkDotNet.Configs.ConfigOptions.DisableParallelBuild, true)",
+                            StringComparison.Ordinal);
 
-                    if (source == newSource)
-                    {
-                        await LogAsync("Failed to find the existing Job type");
+                        if (source == newSource)
+                        {
+                            await LogAsync("Failed to disable BenchmarkDotNet parallel build in RecommendedConfig.cs");
+                        }
+                        else
+                        {
+                            source = newSource;
+                            await LogAsync("Disabled BenchmarkDotNet parallel build to avoid the assembly weaving race");
+                        }
                     }
-                    else
+
+                    if (TryGetFlag("medium") || TryGetFlag("long"))
                     {
-                        File.WriteAllText(path, newSource);
-                        await LogAsync($"Replaced Job type with {jobType}");
+                        string jobType = $"Job.{(TryGetFlag("medium") ? "Medium" : "Long")}Run";
+
+                        // https://github.com/dotnet/performance/blob/d76d845972c2a231f31e88802457d8aaf7263a5b/src/harness/BenchmarkDotNet.Extensions/RecommendedConfig.cs#L53
+                        string newSource = source.Replace(".AddJob(job", $".AddJob((job.ToString().Length >= 0 ? {jobType} : job)", StringComparison.Ordinal);
+
+                        if (source == newSource)
+                        {
+                            await LogAsync("Failed to find the existing Job type");
+                        }
+                        else
+                        {
+                            source = newSource;
+                            await LogAsync($"Replaced Job type with {jobType}");
+                        }
                     }
+
+                    File.WriteAllText(path, source);
                 }
             }
 
