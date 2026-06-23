@@ -299,9 +299,14 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         string? artifactsDir = null;
 
-        await RunProcessAsync("/usr/lib/dotnet/dotnet",
+        // Don't throw on a non-zero exit code. A single failing benchmark (e.g. a broken test in
+        // dotnet/performance) makes the whole process exit with an error, but BenchmarkDotNet still
+        // produces report files for everything that did run. We want to report those partial results
+        // and note the failure rather than throwing away potentially hours of work.
+        int exitCode = await RunProcessAsync("/usr/lib/dotnet/dotnet",
             $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
+            checkExitCode: false,
             processLogs: line =>
             {
                 // Example:
@@ -336,7 +341,10 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
         if (string.IsNullOrEmpty(artifactsDir))
         {
-            throw new Exception("Couldn't find the artifacts directory");
+            // We never saw a single results file, so there's nothing to report.
+            throw new Exception(exitCode == 0
+                ? "Couldn't find the artifacts directory"
+                : $"The benchmark process failed with exit code {exitCode} before producing any results");
         }
 
         await ZipAndUploadArtifactAsync("BDN_Artifacts", artifactsDir);
@@ -399,6 +407,19 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         }
 
         string combinedMarkdown = string.Join("\n\n", results);
+
+        if (exitCode != 0)
+        {
+            await LogAsync($"The benchmark process exited with code {exitCode}. Reporting the {results.Count} result(s) that were still produced.");
+
+            string note =
+                $"⚠️ **The benchmark run did not complete successfully (exit code {exitCode}).** " +
+                "Some benchmarks may be missing from the results below. See the job logs for details.";
+
+            combinedMarkdown = string.IsNullOrEmpty(combinedMarkdown)
+                ? note
+                : $"{note}\n\n{combinedMarkdown}";
+        }
 
         await UploadTextArtifactAsync("results.md", combinedMarkdown);
     }
