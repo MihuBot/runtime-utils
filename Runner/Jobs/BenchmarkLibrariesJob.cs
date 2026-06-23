@@ -274,10 +274,15 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         string filter = FilterNameRegex().Match(CustomArguments).Groups[1].Value;
         filter = filter.Trim().Trim('`').Trim();
 
-        if (!string.IsNullOrWhiteSpace(filter) && !filter.Contains('*'))
-        {
-            filter = $"*{filter}*";
-        }
+        // A single benchmark argument may combine several glob patterns with '|', e.g.
+        // "*Perf_Strings*|*Perf_Basic*|*WriteJson*". BenchmarkDotNet's glob filter does NOT treat
+        // '|' as an OR operator (it Regex.Escape's the pattern, so '|' becomes a literal that never
+        // matches a benchmark name), but passing multiple space-separated patterns to --filter does
+        // OR them together. Split on '|' and emit each pattern separately, wrapping any bare pattern
+        // (one without a '*') with '*...*' as before.
+        filter = string.Join(' ', filter
+            .Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(part => part.Contains('*') ? part : $"*{part}*"));
 
         int dotnetVersion = DotnetHelpers.GetDotnetVersion("performance");
 
@@ -398,7 +403,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         await UploadTextArtifactAsync("results.md", combinedMarkdown);
     }
 
-    [GeneratedRegex(@"^benchmark ([^ ]+)", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+    [GeneratedRegex(@"^benchmark\s+(\S+)", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
     private static partial Regex FilterNameRegex();
 
     // @MihuBot benchmark GetUnicodeCategory https://github.com/dotnet/runtime/compare/4bb0bcd9b5c47df97e51b462d8204d66c7d470fc...c74440f8291edd35843f3039754b887afe61766e
