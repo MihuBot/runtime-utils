@@ -97,21 +97,37 @@ internal static partial class JitDiffUtils
             envVars.Add(("DOTNET_DisableOptimizedThreadStaticAccess", "1"));
         }
 
-        await job.RunProcessAsync("jitutils/bin/jit-diff",
-            $"diff " +
-            (debugInfo ? "--debuginfo " : "") +
-            (verbose ? "--verbose " : "") +
-            (useCctors ? "--cctors " : "") +
-            (useTier0 ? "--tier0 " : "") +
-            (gcInfo ? "--gcinfo " : "") +
-            (sequential ? "--sequential " : "") +
-            $"--output {outputFolder} " +
-            $"{frameworksOrAssembly} --pmi " +
-            $"--core_root {coreRootFolder} " +
-            $"--base {checkedClrFolder}",
-            logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
-            envVars: envVars,
-            cancellationToken: cancellationToken);
+        try
+        {
+            await job.RunProcessAsync("jitutils/bin/jit-diff",
+                $"diff " +
+                (debugInfo ? "--debuginfo " : "") +
+                (verbose ? "--verbose " : "") +
+                (useCctors ? "--cctors " : "") +
+                (useTier0 ? "--tier0 " : "") +
+                (gcInfo ? "--gcinfo " : "") +
+                (sequential ? "--sequential " : "") +
+                $"--output {outputFolder} " +
+                $"{frameworksOrAssembly} --pmi " +
+                $"--core_root {coreRootFolder} " +
+                $"--base {checkedClrFolder}",
+                logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
+                envVars: envVars,
+                cancellationToken: cancellationToken);
+        }
+        finally
+        {
+            // jit-diff backs up the core_root's JIT to 'backup-<jit>' before swapping in the base/diff JIT
+            // and restores from it afterwards, but never deletes the backup. Delete it: a leftover backup
+            // in a shared core_root would be hard-linked into every parallel worker's clone by
+            // CreateCoreRootCloneForJitDiff, and concurrent jit-diff File.Copy writes onto that single
+            // shared inode collide with "the file is being used by another process" on Linux.
+            foreach (string jitName in s_jitDiffMutatedCoreRootFiles)
+            {
+                try { File.Delete(Path.Combine(coreRootFolder, $"backup-{jitName}")); }
+                catch { }
+            }
+        }
     }
 
     public static async Task<string> RunJitAnalyzeAsync(JobBase job, string mainDirectory, string prDirectory, int count = 100)
