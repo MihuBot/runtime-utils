@@ -272,7 +272,7 @@ public abstract class JobBase
 
         await LogAsync($"[{archiveFileName}] Compressing {folderPath}");
 
-        await RunProcessAsync("7z", $"a -mx{(maxCompression ? 7 : 5)} -md{(maxCompression ? 128 : 64)}m -mmt{parallelism} {archiveFilePath} .", logPrefix: archiveFileName, workDir: folderPath, suppressOutputLogs: true);
+        await RunProcessAsync("7z", $"a -mx{(maxCompression ? 5 : 4)} -mmt{parallelism} {archiveFilePath} .", logPrefix: archiveFileName, workDir: folderPath, suppressOutputLogs: true);
 
         await UploadArtifactAsync(archiveFilePath);
 
