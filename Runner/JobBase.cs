@@ -549,6 +549,31 @@ public abstract class JobBase
         }
     }
 
+    // Well-known artifact used to tell the host about a problem that should be surfaced to the user even
+    // though the job as a whole succeeded (see ReportUserVisibleErrorAsync). Content is plain Markdown -
+    // the host owns the presentation (alert block, comment references, ...). Summary is always shown;
+    // Details (if any) is appended in the tracking issue only; a comment is posted when PostComment is set.
+    public const string UserVisibleErrorArtifactFileName = "UserVisibleError.json";
+
+    public sealed record UserVisibleError(string Summary, string? Details, bool PostComment);
+
+    /// <summary>
+    /// Reports an error that should be surfaced to the user even when the job as a whole succeeds. Use this
+    /// for problems that don't fail the job but that the user should still be told about (e.g. part of the
+    /// work failing in a way that likely indicates a bug in the change being tested). Unlike a fatal error,
+    /// this does not terminate the job. Pass plain Markdown and leave presentation to the host:
+    /// <paramref name="summary"/> is always surfaced; <paramref name="details"/> is only added to the
+    /// tracking issue (keep it out of anything that may be posted as a comment); set
+    /// <paramref name="postComment"/> when the problem is likely actionable (e.g. caused by the change under
+    /// test) so the host also posts a comment.
+    /// </summary>
+    public async Task ReportUserVisibleErrorAsync(string summary, string? details = null, bool postComment = false)
+    {
+        await LogAsync($"Surfacing user-visible error to the host (postComment: {postComment}):\n{summary}");
+
+        await UploadTextArtifactAsync(UserVisibleErrorArtifactFileName, JsonSerializer.Serialize(new UserVisibleError(summary, details, postComment)));
+    }
+
     public async Task UploadArtifactAsync(string path, string? fileName = null)
     {
         string name = fileName ?? Path.GetFileName(path);

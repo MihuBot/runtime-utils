@@ -69,14 +69,32 @@ internal static partial class JitDiffUtils
         await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, "--frameworks");
     }
 
-    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, CancellationToken cancellationToken = default)
+    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfZero(assemblyPaths.Length);
 
-        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, cancellationToken);
+        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, output, cancellationToken);
     }
 
-    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, CancellationToken cancellationToken = default)
+    // jit-diff prints a line like "Error running <corerun> on <assembly path>" for every assembly whose
+    // dasm generation failed (see jitutils DiffTool.RunDasmTool). Extract those assembly file names so the
+    // caller can report them and drop their (missing/one-sided) dasm from the cross-branch comparison.
+    public static IEnumerable<string> ParseFailedAssemblyNames(List<string> jitDiffOutput)
+    {
+        foreach (string line in jitDiffOutput)
+        {
+            Match match = JitDiffAssemblyFailureRegex().Match(line);
+            if (match.Success)
+            {
+                yield return Path.GetFileName(match.Groups[1].Value.Trim());
+            }
+        }
+    }
+
+    [GeneratedRegex(@"Error running \S+ on (.+)$")]
+    private static partial Regex JitDiffAssemblyFailureRegex();
+
+    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
     {
         bool useCctors = !job.TryGetFlag("nocctors");
         bool useTier0 = job.TryGetFlag("tier0");
@@ -111,6 +129,7 @@ internal static partial class JitDiffUtils
                 $"{frameworksOrAssembly} --pmi " +
                 $"--core_root {coreRootFolder} " +
                 $"--base {checkedClrFolder}",
+                output: output,
                 logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
                 envVars: envVars,
                 cancellationToken: cancellationToken);

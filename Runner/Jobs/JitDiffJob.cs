@@ -352,6 +352,8 @@ internal sealed class JitDiffJob : JobBase
 
     private async Task<string> CollectFrameworksDiffsAsync(bool skipMain)
     {
+        List<ExtraAssemblyDiffFailure> extraAssemblyFailures = new();
+
         try
         {
             await Task.WhenAll(
@@ -364,9 +366,11 @@ internal sealed class JitDiffJob : JobBase
 
             int memoryAvailableGB = GetRemainingSystemMemoryGB();
 
-            await Task.WhenAll(
+            List<ExtraAssemblyDiffFailure>[] failuresByBranch = await Task.WhenAll(
                 DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory, memoryAvailableGB),
                 DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory, memoryAvailableGB));
+
+            extraAssemblyFailures.AddRange(failuresByBranch.SelectMany(branchFailures => branchFailures));
         }
         finally
         {
@@ -378,14 +382,24 @@ internal sealed class JitDiffJob : JobBase
         CombineAllDiffs(DiffsMainDirectory, CombinedDasmMainDirectory);
         CombineAllDiffs(DiffsPrDirectory, CombinedDasmPrDirectory);
 
+        // Drop the dasm of any assembly that failed to diff on either branch. Otherwise its one-sided
+        // (missing / partial) dasm shows up in jit-analyze as a flood of spurious +100% / -100% diffs.
+        RemoveFailedAssemblyDasm(extraAssemblyFailures, CombinedDasmMainDirectory, CombinedDasmPrDirectory);
+
         string diffAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this, CombinedDasmMainDirectory, CombinedDasmPrDirectory);
+
+        // Surface any extra-assembly diff failures to the user (rendered prominently by the host) rather
+        // than burying them inside the collapsed diff summary code block.
+        await ReportExtraAssemblyFailuresAsync(extraAssemblyFailures);
 
         PendingTasks.Enqueue(UploadTextArtifactAsync("diff-frameworks.txt", diffAnalyzeSummary));
 
         return diffAnalyzeSummary;
 
-        async Task DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder, int memoryAvailableGB)
+        async Task<List<ExtraAssemblyDiffFailure>> DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder, int memoryAvailableGB)
         {
+            var failures = new List<ExtraAssemblyDiffFailure>();
+
             string projectsRoot = ExtraProjectsDirectory;
             string branch = coreRootFolder.Contains("main", StringComparison.Ordinal) ? "main" : "pr";
 
@@ -413,7 +427,7 @@ internal sealed class JitDiffJob : JobBase
                 .OrderByDescending(d => Directory.GetFiles(d, "*.dll").Sum(f => new FileInfo(f).Length)));
             if (projectDirs.Count == 0)
             {
-                return;
+                return failures;
             }
 
             int coreRootCopies = Math.Min(Math.Min(Environment.ProcessorCount, memoryAvailableGB * 2), projectDirs.Count);
@@ -472,13 +486,38 @@ internal sealed class JitDiffJob : JobBase
 
                     string[] assemblyPaths = testedAssemblies.Select(a => Path.GetFullPath(Path.Combine(projectDir, a))).ToArray();
 
+                    string projectName = Path.GetFileName(projectDir);
+                    List<string> jitDiffOutput = new();
+
                     try
                     {
-                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, checkedClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {Path.GetFileName(projectDir)}");
+                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, checkedClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {projectName}", output: jitDiffOutput);
                     }
                     catch (Exception ex)
                     {
-                        await LogAsync($"Failed to diff {Path.GetFileName(projectDir)}: {ex.Message}");
+                        await LogAsync($"Failed to diff {projectName} on {branch}: {ex.Message}");
+
+                        // Prefer the specific assemblies jit-diff named as failing; fall back to all of the
+                        // project's assemblies if it failed without naming one (e.g. a crash before dasm).
+                        string[] failedAssemblies = JitDiffUtils.ParseFailedAssemblyNames(jitDiffOutput)
+                            .Distinct(StringComparer.OrdinalIgnoreCase)
+                            .ToArray();
+
+                        if (failedAssemblies.Length == 0)
+                        {
+                            failedAssemblies = testedAssemblies.Select(Path.GetFileName).ToArray()!;
+                        }
+
+                        string[] errorLines = ExtractJitDiffErrorLines(jitDiffOutput);
+                        if (errorLines.Length == 0)
+                        {
+                            errorLines = [ex.Message];
+                        }
+
+                        lock (failures)
+                        {
+                            failures.Add(new ExtraAssemblyDiffFailure(branch, projectName, failedAssemblies, errorLines));
+                        }
                     }
                 }
 
@@ -487,6 +526,8 @@ internal sealed class JitDiffJob : JobBase
                     try { Directory.Delete(newCoreRootFolder, recursive: true); } catch { }
                 }
             });
+
+            return failures;
         }
 
         void CombineAllDiffs(string directory, string destination)
@@ -498,6 +539,142 @@ internal sealed class JitDiffJob : JobBase
                 File.Copy(file, Path.Combine(destination, Path.GetFileName(file)));
             });
         }
+    }
+
+    private sealed record ExtraAssemblyDiffFailure(string Branch, string Project, string[] Assemblies, string[] ErrorLines);
+
+    private static readonly string[] s_jitDiffErrorMarkers =
+    [
+        "Error running",
+        "errors compiling set",
+        "returned with",
+        "Dasm commands returned",
+        "Dasm task failed",
+        "Failures detected generating asm",
+        "Assert failure",
+        "Unhandled exception",
+    ];
+
+    private static string[] ExtractJitDiffErrorLines(List<string> jitDiffOutput)
+    {
+        return jitDiffOutput
+            .Where(line => s_jitDiffErrorMarkers.Any(marker => line.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+            .Distinct()
+            .ToArray();
+    }
+
+    private static void RemoveFailedAssemblyDasm(List<ExtraAssemblyDiffFailure> failures, params string[] combinedDasmDirectories)
+    {
+        foreach (string dasmFile in failures
+            .SelectMany(failure => failure.Assemblies)
+            .Select(assembly => $"{Path.GetFileNameWithoutExtension(assembly)}.dasm")
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (string directory in combinedDasmDirectories)
+            {
+                try { File.Delete(Path.Combine(directory, dasmFile)); }
+                catch { }
+            }
+        }
+    }
+
+    private async Task ReportExtraAssemblyFailuresAsync(List<ExtraAssemblyDiffFailure> failures)
+    {
+        if (failures.Count == 0)
+        {
+            return;
+        }
+
+        bool failedOnMain = failures.Any(failure => failure.Branch == "main");
+        bool failedOnPr = failures.Any(failure => failure.Branch == "pr");
+
+        // Only the PR branch failing (nothing on main) points at the PR itself; failures that also happen
+        // on main are more likely environmental/pre-existing, so they're reported but not flagged on the PR.
+        bool likelyCausedByPr = failedOnPr && !failedOnMain;
+
+        var failedAssemblies = failures
+            .SelectMany(failure => failure.Assemblies.Select(assembly => (failure.Branch, Assembly: assembly)))
+            .GroupBy(entry => entry.Assembly, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+        // Plain Markdown - the host owns presentation (alert block, comment, ...). The failed-assembly list
+        // is capped so it stays readable; this concise summary is all that's posted as a comment.
+        const int MaxListedAssemblies = 10;
+
+        StringBuilder summary = new();
+
+        summary.AppendLine($"**{failedAssemblies.Length} extra test {(failedAssemblies.Length == 1 ? "assembly" : "assemblies")} failed to produce JIT diffs** and {(failedAssemblies.Length == 1 ? "was" : "were")} excluded from the diff analysis:");
+
+        foreach (var group in failedAssemblies.Take(MaxListedAssemblies))
+        {
+            string branches = string.Join(", ", group.Select(entry => entry.Branch).Distinct().OrderBy(branch => branch, StringComparer.Ordinal));
+            summary.AppendLine($"- `{group.Key}` ({branches})");
+        }
+
+        if (failedAssemblies.Length > MaxListedAssemblies)
+        {
+            summary.AppendLine($"- ... and {failedAssemblies.Length - MaxListedAssemblies} more");
+        }
+
+        if (likelyCausedByPr)
+        {
+            summary.AppendLine();
+            summary.AppendLine("All failures happened only on the PR branch, which likely indicates a bug introduced by the PR (e.g. a JIT assert or crash while compiling these assemblies).");
+        }
+
+        string summaryMarkdown = summary.ToString().TrimEnd();
+
+        // The full per-assembly output can be large, so it's only shown in the (collapsible) tracking issue
+        // details - never in a posted comment.
+        StringBuilder details = new();
+
+        details.AppendLine("<details>");
+        details.AppendLine("<summary>Relevant output</summary>");
+        details.AppendLine();
+        details.AppendLine("```");
+
+        const int MaxOutputLines = 60;
+        int outputLines = 0;
+        bool truncated = false;
+
+        foreach (ExtraAssemblyDiffFailure failure in failures
+            .OrderBy(failure => failure.Branch, StringComparer.Ordinal)
+            .ThenBy(failure => failure.Project, StringComparer.OrdinalIgnoreCase))
+        {
+            foreach (string line in failure.ErrorLines)
+            {
+                if (outputLines++ == MaxOutputLines)
+                {
+                    truncated = true;
+                    break;
+                }
+
+                details.AppendLine($"[{failure.Branch} {failure.Project}] {line}");
+            }
+
+            if (truncated)
+            {
+                break;
+            }
+        }
+
+        if (truncated)
+        {
+            details.AppendLine("... (truncated, see the full logs for details)");
+        }
+
+        details.AppendLine("```");
+        details.AppendLine();
+        details.AppendLine("</details>");
+
+        string detailsMarkdown = details.ToString().TrimEnd();
+
+        await LogAsync($"{summaryMarkdown}\n\n{detailsMarkdown}");
+
+        // Post a comment (summary only, no verbose output) when the PR is the likely cause; the full report
+        // always goes to the tracking issue.
+        await ReportUserVisibleErrorAsync(summaryMarkdown, details: detailsMarkdown, postComment: likelyCausedByPr);
     }
 
     private async Task UploadJitDiffExamplesAsync(string diffAnalyzeSummary, bool regressions)
