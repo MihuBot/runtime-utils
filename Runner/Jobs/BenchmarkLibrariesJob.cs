@@ -251,20 +251,62 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             entry.Directory = $"cr-{i.ToString().PadLeft(4, '0')}-{entry.Sha}";
         }
 
+        // Most CoreRoots are compressed as a ZStandard delta against an earlier standalone CoreRoot. Fetch
+        // and decompress each distinct prefix once up front - the whole range typically shares a single one.
+        // Prefixes are guaranteed to be standalone (prefix chains are rejected when a CoreRoot is saved),
+        // so each one is decompressible on its own.
+        Dictionary<string, ReadOnlyMemory<byte>> prefixes = [];
+
+        foreach (CoreRootAPI.CoreRootEntry entry in entries)
+        {
+            if (string.IsNullOrEmpty(entry.PrefixBlobName) || prefixes.ContainsKey(entry.PrefixBlobName))
+            {
+                continue;
+            }
+
+            if (string.IsNullOrEmpty(entry.PrefixUrl))
+            {
+                throw new Exception($"CoreRoot {entry.Sha} was compressed with prefix '{entry.PrefixBlobName}' but no download link was provided");
+            }
+
+            await LogAsync($"Downloading CoreRoot compression prefix '{entry.PrefixBlobName}' ...");
+
+            using var prefixArchive = new TempFile("tar.zst");
+            using var prefixTar = new TempFile("tar");
+
+            await DownloadToFileAsync(entry.PrefixUrl, prefixArchive.Path);
+            await CoreRootArchive.DecompressAsync(prefixArchive.Path, prefixTar.Path, prefix: default, JobTimeout);
+
+            prefixes.Add(entry.PrefixBlobName, await CoreRootArchive.ReadPrefixAsync(prefixTar.Path, JobTimeout));
+        }
+
         await LogAsync($"Downloading {entries.Length} CoreRoots ...");
 
-        await Parallel.ForEachAsync(entries, async (entry, _) =>
+        // Decompressing with a 2 GB window is memory hungry, so don't do too many of these at once.
+        await Parallel.ForEachAsync(entries, new ParallelOptions { MaxDegreeOfParallelism = 4 }, async (entry, cancellationToken) =>
         {
-            Directory.CreateDirectory(entry.Directory!);
+            ReadOnlyMemory<byte> prefix = string.IsNullOrEmpty(entry.PrefixBlobName) ? default : prefixes[entry.PrefixBlobName];
 
-            using var archive = new TempFile("7z");
-            byte[] archiveBytes = await SendAsyncCore(HttpMethod.Get, entry.Url!, content: null, async response => await response.Content.ReadAsByteArrayAsync());
-            File.WriteAllBytes(archive.Path, archiveBytes);
+            using var archive = new TempFile("tar.zst");
+            using var tar = new TempFile("tar");
 
-            await RunProcessAsync("7z", $"x {archive.Path} -o{entry.Directory} ", logPrefix: $"Extract {entry.Sha}");
+            await DownloadToFileAsync(entry.Url!, archive.Path);
+            await CoreRootArchive.DecompressAsync(archive.Path, tar.Path, prefix, cancellationToken);
+            await CoreRootArchive.ExtractTarAsync(tar.Path, entry.Directory!, cancellationToken);
         });
 
         return entries.Select(entry => $"{entry.Directory}/corerun").ToArray();
+    }
+
+    private async Task DownloadToFileAsync(string url, string filePath)
+    {
+        await SendAsyncCore<object?>(HttpMethod.Get, url, content: null, async response =>
+        {
+            await using Stream source = await response.Content.ReadAsStreamAsync();
+            await using var destination = File.Create(filePath);
+            await source.CopyToAsync(destination);
+            return null;
+        });
     }
 
     private async Task RunBenchmarksAsync(string[] coreRunPaths)

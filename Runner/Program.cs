@@ -43,6 +43,18 @@ static async Task RunAsync(string[] args)
         }
     }
 
+    const string MarkerFile = ".runner-in-use";
+
+    if (File.Exists(MarkerFile))
+    {
+        throw new InvalidOperationException(
+            $"Refusing to start: '{Environment.CurrentDirectory}' was already used by a previous runner process " +
+            $"[{File.ReadAllText(MarkerFile).Trim()}]. State left behind by that run would silently corrupt this job. " +
+            $"Start the job on a clean runner, or delete '{Path.GetFullPath(MarkerFile)}' once the directory has been cleaned.");
+    }
+
+    File.WriteAllText(MarkerFile, $"job={jobId} runner={runnerId} pid={Environment.ProcessId} started={DateTime.UtcNow:u}");
+
     var client = new HttpClient(new SocketsHttpHandler
     {
         KeepAlivePingDelay = TimeSpan.FromSeconds(5),

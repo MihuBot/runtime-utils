@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>
     <NoWarn>${NoWarn};IDE0305</NoWarn>
     <InvariantGlobalization>true</InvariantGlobalization>
@@ -18,8 +18,6 @@
     <PackageReference Include="NuGet.Versioning" Version="7.6.0" />
     <PackageReference Include="NuGet.Protocol" Version="7.6.0" />
     <PackageReference Include="NuGet.Resolver" Version="7.6.0" />
-    <PackageReference Include="System.IO.Pipelines" Version="10.0.9" />
-    <PackageReference Include="System.Linq.Async" Version="7.0.1" />
   </ItemGroup>
 
 </Project>

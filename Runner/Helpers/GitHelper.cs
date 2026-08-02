@@ -1,4 +1,6 @@
-﻿namespace Runner.Helpers;
+﻿using System.Globalization;
+
+namespace Runner.Helpers;
 
 internal static class GitHelper
 {
@@ -46,20 +48,40 @@ internal static class GitHelper
         return lines;
     }
 
-    public static async Task<List<string>> ListCommitsAsync(JobBase job, int lastNDays, string workDir)
+    /// <summary>
+    /// Lists the commits from the last <paramref name="lastNDays"/> days, newest first, along with each
+    /// commit's committer timestamp.
+    /// </summary>
+    public static async Task<List<(string Sha, DateTime CommitTime)>> ListCommitsAsync(JobBase job, int lastNDays, string workDir)
     {
         List<string> lines = [];
 
         await job.RunProcessAsync("git",
-            $"log --pretty=format:%H --since={lastNDays}days",
+            $"log --pretty=format:%H;%cI --since={lastNDays}days",
             lines,
             workDir: workDir,
             checkExitCode: false,
             suppressOutputLogs: true,
             suppressStartingLog: true);
 
-        return lines;
+        List<(string Sha, DateTime CommitTime)> commits = new(lines.Count);
+
+        foreach (string line in lines)
+        {
+            if (line.Split(';') is [string sha, string time] && ParseCommitTime(time) is { } commitTime)
+            {
+                commits.Add((sha, commitTime));
+            }
+        }
+
+        return commits;
     }
+
+    /// <summary>Parses a strict ISO 8601 git timestamp (<c>%cI</c>) as UTC.</summary>
+    private static DateTime? ParseCommitTime(string value) =>
+        DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out DateTimeOffset time)
+            ? time.UtcDateTime
+            : null;
 
     public static async Task<string> GetCurrentCommitAsync(JobBase job, string workDir, string? branch = null)
     {

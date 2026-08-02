@@ -2,8 +2,37 @@
 
 internal sealed class CoreRootGenerationJob : JobBase
 {
+    /// <summary>How many CoreRoots we compress against a single reference before creating a fresh one.</summary>
+    private const int MaxCommitsPerReference = 20;
+
+    /// <summary>
+    /// How far apart in <em>commit</em> time a reference and a delta may be before a fresh reference is
+    /// created. Wall-clock time is deliberately not used: CoreRoots are not necessarily generated in commit
+    /// order (a job may be started manually for older commits), and how well a delta compresses depends on
+    /// how far apart the two commits are in history, not on when they happened to be built.
+    /// </summary>
+    private static readonly TimeSpan MaxReferenceCommitAge = TimeSpan.FromDays(3);
+
     private readonly HashSet<(string? Sha, string? Type)> _toSkip = [];
     private int _builtThisSession;
+
+    /// <summary>
+    /// Compression is serialized: every delta is produced against <see cref="_referencePrefix"/>, and the
+    /// reference is swapped out once it is too far from the commit being built / used by too many commits.
+    /// </summary>
+    private readonly SemaphoreSlim _compressionLock = new(1, 1);
+    private ReadOnlyMemory<byte> _referencePrefix;
+    private string? _referenceBlobName;
+    private DateTime _referenceCommitTime;
+    private int _commitsUsingReference;
+
+    /// <summary>
+    /// A previously uploaded reference that this session may reuse. It is only downloaded once a commit
+    /// that can actually use it comes up, so that a session building commits far away from it (or building
+    /// nothing at all) doesn't pay for a large download it will throw away.
+    /// </summary>
+    private CoreRootAPI.CoreRootEntry? _candidateReference;
+    private int _candidateReferenceCommits;
 
     public CoreRootGenerationJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
@@ -15,11 +44,14 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         string type = "release";
 
-        foreach (var entry in await CoreRootAPI.AllAsync(this, type))
+        CoreRootAPI.CoreRootEntry[] existingEntries = await CoreRootAPI.AllAsync(this, type);
+
+        foreach (var entry in existingEntries)
         {
             _toSkip.Add((entry.Sha, entry.Type));
         }
 
+        SelectCandidateReference(existingEntries);
         while (true)
         {
             int built = _builtThisSession;
@@ -40,17 +72,108 @@ internal sealed class CoreRootGenerationJob : JobBase
     {
         Task cloneRuntimeTask = RuntimeHelpers.CloneRuntimeMainAsync(this);
 
-        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget p7zip-full ninja-build", logPrefix: "Install tools");
+        Task aptGetTask = RunProcessAsync("apt-get", "install -y zip wget ninja-build", logPrefix: "Install tools");
 
         await aptGetTask;
         await cloneRuntimeTask;
+    }
+
+    /// <summary>
+    /// Picks the reference this session should reuse: the one closest to the tip of history that still has
+    /// capacity left. Selection is by commit time rather than by when the CoreRoot was generated, because
+    /// entries are not necessarily created in commit order.
+    /// </summary>
+    private void SelectCandidateReference(CoreRootAPI.CoreRootEntry[] entries)
+    {
+        // How many deltas each reference is already responsible for. Counting the entries that actually
+        // point at it is exact and order-independent, unlike "everything created after it".
+        Dictionary<string, int> deltasPerReference = entries
+            .Where(e => !string.IsNullOrEmpty(e.PrefixBlobName))
+            .GroupBy(e => e.PrefixBlobName!)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.Ordinal);
+
+        (CoreRootAPI.CoreRootEntry Entry, int Commits)? best = entries
+            .Where(e => string.IsNullOrEmpty(e.PrefixBlobName) && !string.IsNullOrEmpty(e.Url) && !string.IsNullOrEmpty(e.BlobName))
+            .Select(e => (Entry: e, Commits: deltasPerReference.GetValueOrDefault(e.BlobName!)))
+            .Where(e => e.Commits < MaxCommitsPerReference)
+            .OrderByDescending(e => e.Entry.CommitTime)
+            .Select(e => ((CoreRootAPI.CoreRootEntry, int)?)e)
+            .FirstOrDefault();
+
+        if (best is null)
+        {
+            return;
+        }
+
+        _candidateReference = best.Value.Entry;
+        _candidateReferenceCommits = best.Value.Commits;
+    }
+
+    /// <summary>
+    /// A reference may be used for a commit when the two commits are close enough together in history and
+    /// the reference isn't already used by too many commits.
+    /// </summary>
+    private static bool CanUseReference(DateTime referenceCommitTime, int commitsUsingReference, DateTime commitTime) =>
+        commitsUsingReference < MaxCommitsPerReference &&
+        (commitTime - referenceCommitTime).Duration() < MaxReferenceCommitAge;
+
+    /// <summary>Whether the reference currently held in memory can serve <paramref name="commitTime"/>.</summary>
+    private bool CanUseLoadedReference(DateTime commitTime) =>
+        !_referencePrefix.IsEmpty &&
+        CanUseReference(_referenceCommitTime, _commitsUsingReference, commitTime);
+
+    /// <summary>
+    /// Downloads and decompresses <see cref="_candidateReference"/> so that it can be used as a prefix.
+    /// Must be called while holding <see cref="_compressionLock"/>.
+    /// </summary>
+    private async Task LoadCandidateReferenceAsync(string logPrefix)
+    {
+        CoreRootAPI.CoreRootEntry candidate = _candidateReference!;
+
+        // Only ever attempted once - on failure we fall back to creating a fresh reference.
+        _candidateReference = null;
+
+        try
+        {
+            await LogAsync($"[{logPrefix}] Downloading compression reference '{candidate.BlobName}' (commit time {candidate.CommitTime:u}, used by {_candidateReferenceCommits} commits) ...");
+
+            using var archive = new TempFile("tar.zst");
+            using var tar = new TempFile("tar");
+
+            await DownloadToFileAsync(candidate.Url!, archive.Path);
+            await CoreRootArchive.DecompressAsync(archive.Path, tar.Path, prefix: default, JobTimeout);
+
+            _referencePrefix = await CoreRootArchive.ReadPrefixAsync(tar.Path, JobTimeout);
+            _referenceBlobName = candidate.BlobName;
+            _referenceCommitTime = candidate.CommitTime;
+            _commitsUsingReference = _candidateReferenceCommits;
+
+            await LogAsync($"[{logPrefix}] Using '{candidate.BlobName}' as the compression reference.");
+        }
+        catch (Exception ex)
+        {
+            _referencePrefix = default;
+            _referenceBlobName = null;
+            await LogAsync($"[{logPrefix}] Failed to restore the compression reference: {ex}");
+        }
+    }
+
+    private async Task DownloadToFileAsync(string url, string filePath)
+    {
+        await SendAsyncCore<object?>(HttpMethod.Get, url, content: null, async response =>
+        {
+            await using Stream source = await response.Content.ReadAsStreamAsync();
+            await using var destination = File.Create(filePath);
+            await source.CopyToAsync(destination);
+            return null;
+        });
     }
 
     private async Task BuildCoreRootsAsync(string type)
     {
         int lastNDays = int.Parse(GetArgument(nameof(lastNDays), "2"));
 
-        List<string> commits = await GitHelper.ListCommitsAsync(this, lastNDays, "runtime");
+        List<(string Sha, DateTime CommitTime)> commits = await GitHelper.ListCommitsAsync(this, lastNDays, "runtime");
         commits.Reverse();
 
         await LogAsync($"Found {commits.Count} commits in the last {lastNDays} days");
@@ -73,7 +196,7 @@ internal sealed class CoreRootGenerationJob : JobBase
             LastProgressSummary = progressMessage;
             await LogAsync(progressMessage);
 
-            string commit = commits[i];
+            (string commit, DateTime commitTime) = commits[i];
 
             if (!_toSkip.Add((commit, type)))
             {
@@ -127,14 +250,7 @@ internal sealed class CoreRootGenerationJob : JobBase
             {
                 try
                 {
-                    string archivePath = await CompressArtifactsAsync(logPrefix, type, artifactsDir);
-
-                    await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
-                    string blobName = $"{commit}_{Arch}_{Os}_{type}.7z";
-                    await UploadCoreRootAsync(blobName, archivePath);
-                    await CoreRootAPI.SaveAsync(this, commit, type, blobName);
-
-                    File.Delete(archivePath);
+                    await CompressUploadAndSaveAsync(logPrefix, commit, commitTime, type, artifactsDir);
 
                     await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
                 }
@@ -211,7 +327,7 @@ internal sealed class CoreRootGenerationJob : JobBase
 
     private async Task<string> CopyArtifactsAsync(string logPrefix, string commit, string type)
     {
-        await LogAsync($"[{logPrefix}] Compressing {type} artifacts ...");
+        await LogAsync($"[{logPrefix}] Copying {type} artifacts ...");
 
         string artifactsDir = $"artifacts-{commit}-{type}";
         Directory.CreateDirectory(artifactsDir);
@@ -236,17 +352,102 @@ internal sealed class CoreRootGenerationJob : JobBase
         return artifactsDir;
     }
 
-    private async Task<string> CompressArtifactsAsync(string logPrefix, string type, string artifactsDir)
+    /// <summary>
+    /// Tars the artifacts, compresses them with ZStandard, and publishes the result.
+    /// <para>
+    /// A CoreRoot is either a <em>reference</em> (compressed standalone) or a <em>delta</em> (compressed
+    /// against a reference). References are never themselves compressed against another reference: prefix
+    /// chains are forbidden, because a consumer only downloads a single prefix before decompressing.
+    /// </para>
+    /// </summary>
+    private async Task CompressUploadAndSaveAsync(string logPrefix, string commit, DateTime commitTime, string type, string artifactsDir)
     {
-        await LogAsync($"[{logPrefix}] Compressing {type} artifacts ...");
+        string tarPath = Path.GetFullPath($"{artifactsDir}.tar");
+        string archivePath = Path.GetFullPath($"{artifactsDir}{CoreRootArchive.Extension}");
+        string blobName = CoreRootArchive.GetBlobName(commit, type);
 
-        string archiveName = $"{artifactsDir}.7z";
-
-        await RunProcessAsync("7z", $"a -mx9 -md512m {archiveName} .", logPrefix: logPrefix, workDir: artifactsDir, priority: ProcessPriorityClass.BelowNormal);
-        File.Move(Path.Combine(artifactsDir, archiveName), archiveName);
-
+        await LogAsync($"[{logPrefix}] Creating {type} tarball ...");
+        await CoreRootArchive.CreateTarAsync(artifactsDir, tarPath, JobTimeout);
         Directory.Delete(artifactsDir, recursive: true);
 
-        return archiveName;
+        // A 2 GB compression window is memory hungry and the reference is swapped out below,
+        // so only ever compress one CoreRoot at a time.
+        await _compressionLock.WaitAsync();
+        bool holdsLock = true;
+        try
+        {
+            // Prefer the reference already held in memory; otherwise fall back to the one left over from a
+            // previous session, downloading it only now that a commit can actually use it.
+            if (!CanUseLoadedReference(commitTime) &&
+                _candidateReference is not null &&
+                CanUseReference(_candidateReference.CommitTime, _candidateReferenceCommits, commitTime))
+            {
+                await LoadCandidateReferenceAsync(logPrefix);
+            }
+
+            if (CanUseLoadedReference(commitTime))
+            {
+                string prefixBlobName = _referenceBlobName!;
+
+                await LogAsync($"[{logPrefix}] Compressing {type} artifacts using '{prefixBlobName}' as the prefix ...");
+
+                await CoreRootArchive.CompressAsync(tarPath, archivePath, _referencePrefix, JobTimeout);
+                _commitsUsingReference++;
+
+                File.Delete(tarPath);
+                await LogArchiveSizeAsync(logPrefix, archivePath);
+
+                // Deltas don't mutate the reference, so let the next commit start compressing while
+                // this one uploads.
+                _compressionLock.Release();
+                holdsLock = false;
+
+                await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, prefixBlobName);
+                return;
+            }
+
+            await LogAsync($"[{logPrefix}] Compressing {type} artifacts as a new standalone reference ...");
+
+            await CoreRootArchive.CompressAsync(tarPath, archivePath, prefix: default, JobTimeout);
+
+            ReadOnlyMemory<byte> prefix = await CoreRootArchive.ReadPrefixAsync(tarPath, JobTimeout);
+            File.Delete(tarPath);
+            await LogArchiveSizeAsync(logPrefix, archivePath);
+
+            // Keep holding the lock across the upload: no delta may be produced against a reference that
+            // isn't durably stored yet, and the reference is only adopted once the save has succeeded.
+            // If this throws, the reference is not adopted and the next commit retries as a reference.
+            await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, prefixBlobName: null);
+
+            _referencePrefix = prefix;
+            _referenceBlobName = blobName;
+            _referenceCommitTime = commitTime;
+            _commitsUsingReference = 0;
+        }
+        finally
+        {
+            try { File.Delete(tarPath); }
+            catch { }
+
+            if (holdsLock)
+            {
+                _compressionLock.Release();
+            }
+        }
+    }
+
+    private async Task UploadAndSaveAsync(string logPrefix, string commit, DateTime commitTime, string type, string blobName, string archivePath, string? prefixBlobName)
+    {
+        await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
+
+        await UploadCoreRootAsync(blobName, archivePath);
+        await CoreRootAPI.SaveAsync(this, commit, type, blobName, prefixBlobName, commitTime);
+
+        File.Delete(archivePath);
+    }
+
+    private async Task LogArchiveSizeAsync(string logPrefix, string archivePath)
+    {
+        await LogAsync($"[{logPrefix}] Archive size: {new FileInfo(archivePath).Length / (1024d * 1024d):F1} MB");
     }
 }
