@@ -125,16 +125,23 @@ internal sealed class CoreRootGenerationJob : JobBase
 
             PendingTasks.Enqueue(Task.Run(async () =>
             {
-                string archivePath = await CompressArtifactsAsync(logPrefix, type, artifactsDir);
+                try
+                {
+                    string archivePath = await CompressArtifactsAsync(logPrefix, type, artifactsDir);
 
-                await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
-                string blobName = $"{commit}_{Arch}_{Os}_{type}.7z";
-                await UploadCoreRootAsync(blobName, archivePath);
-                await CoreRootAPI.SaveAsync(this, commit, type, blobName);
+                    await LogAsync($"[{logPrefix}] Uploading CoreRoot ...");
+                    string blobName = $"{commit}_{Arch}_{Os}_{type}.7z";
+                    await UploadCoreRootAsync(blobName, archivePath);
+                    await CoreRootAPI.SaveAsync(this, commit, type, blobName);
 
-                File.Delete(archivePath);
+                    File.Delete(archivePath);
 
-                await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
+                    await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
+                }
+                catch (Exception ex)
+                {
+                    await LogAsync($"[{logPrefix}] Error: {ex}");
+                }
             }));
         }
 
