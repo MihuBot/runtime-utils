@@ -683,7 +683,7 @@ public abstract class JobBase
     private async Task<string?> ChangeWorkingDirectoryToRamOrFastestDiskAsyncCore(bool allowRamDisk)
     {
         // Running on a shared environment, don't mess it up for future jobs
-        if (TryGetFlag("helix"))
+        if (TryGetFlag("helix") || Metadata.ContainsKey("HelixQueue"))
         {
             return null;
         }
