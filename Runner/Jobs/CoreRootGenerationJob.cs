@@ -341,22 +341,75 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         await RuntimeHelpers.CopyReleaseArtifactsAsync(this, logPrefix, artifactsDir, runtimeConfig: type == "release" ? "Release" : "Checked");
 
+        long sizeBefore = GetDirectorySize();
+
+        // Consumers only ever run 'corerun', so everything the runtime itself doesn't load is dropped: the
+        // compiler toolchains, the inputs used to link native binaries, and the diagnostic tooling. That is
+        // ~85% of the tree, and it is also the part that changes wholesale between commits (the compilers
+        // are single-file binaries that get relinked), so it dominates the deltas too.
+        string[] unusedDirectories =
+        [
+            // NativeAOT: the compiler, its SDK, and the static libraries, headers and targets it links against.
+            "aotsdk", "build", "ilc", "ilc-published", "inc", "lib",
+
+            // Crossgen2, and the pre-crossgen IL copy of CoreLib it consumes.
+            "crossgen2", "crossgen2-published", "IL",
+
+            // Single-file published copies of crossgen2 and ilc, each with its own set of cross-targeting JITs.
+            "x64",
+
+            // Byte for byte copies of the native runtime libraries that are already at the root.
+            "sharedFramework",
+
+            // Tooling: R2R/PGO/symbol inspection, the single-file host, and build-time helpers.
+            "AssemblyChecker", "cdac-build-tool", "corehost", "dotnet-pgo", "gcinfo",
+            "PDB", "PdbChecker", "R2RDump", "R2RTest", "SuperFileCheck",
+        ];
+
+        string[] unusedFiles =
+        [
+            "ilasm", "ildasm", "mcs", "superpmi", "libjitinterface_x64.so",
+            "ILCompiler.Reflection.ReadyToRun.dll", "ILCompiler.Reflection.ReadyToRun.deps.json",
+
+            // The R2R symbol map for CoreLib - diagnostics only, and ~8 MB of it.
+            "System.Private.CoreLib.ni.r2rmap",
+        ];
+
+        // Materialized: the enumeration walks the same directory the deletes are removing entries from.
+        foreach (string directory in Directory.GetDirectories(artifactsDir))
+        {
+            if (unusedDirectories.Contains(Path.GetFileName(directory), StringComparer.OrdinalIgnoreCase))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+
         foreach (string file in Directory.EnumerateFiles(artifactsDir, "*", SearchOption.AllDirectories))
         {
-            if (file.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith(".mibc", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains("SuperFileCheck/", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains("R2RTest/", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains("PDB/", StringComparison.OrdinalIgnoreCase) ||
-                file.Contains("PdbChecker/", StringComparison.OrdinalIgnoreCase))
+            if (IsUnused(Path.GetFileName(file)))
             {
                 File.Delete(file);
             }
         }
 
+        await LogAsync($"[{logPrefix}] Trimmed the {type} artifacts from {ToMB(sizeBefore)} MB to {ToMB(GetDirectorySize())} MB");
+
         return artifactsDir;
+
+        bool IsUnused(string fileName) =>
+            fileName.EndsWith(".pdb", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+            fileName.EndsWith(".mibc", StringComparison.OrdinalIgnoreCase) ||
+            // Static libraries are only ever link inputs.
+            fileName.EndsWith(".a", StringComparison.OrdinalIgnoreCase) ||
+            // Cross-targeting JITs for crossgen2/superpmi. corerun only ever loads 'libclrjit.so'.
+            fileName.StartsWith("libclrjit_", StringComparison.OrdinalIgnoreCase) ||
+            fileName.StartsWith("libsuperpmi-shim-", StringComparison.OrdinalIgnoreCase) ||
+            unusedFiles.Contains(fileName, StringComparer.OrdinalIgnoreCase);
+
+        long GetDirectorySize() =>
+            new DirectoryInfo(artifactsDir).EnumerateFiles("*", SearchOption.AllDirectories).Sum(f => f.Length);
     }
 
     /// <summary>

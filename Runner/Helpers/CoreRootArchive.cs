@@ -48,7 +48,7 @@ internal static class CoreRootArchive
     {
         var options = new ZstandardCompressionOptions
         {
-            Quality = ZstandardCompressionOptions.DefaultQuality + 2,
+            Quality = ZstandardCompressionOptions.DefaultQuality + 3,
             WindowLog2 = WindowLog2,
             EnableLongDistanceMatching = true,
         };
