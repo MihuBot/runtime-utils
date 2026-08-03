@@ -44,6 +44,12 @@ internal sealed class CoreRootGenerationJob : JobBase
     private CoreRootAPI.CoreRootEntry? _candidateReference;
     private int _candidateReferenceCommits;
 
+    /// <summary>
+    /// The entries <see cref="SelectCandidateReference"/> picks from, held until the first commit range is
+    /// known. Cleared once a candidate has been chosen.
+    /// </summary>
+    private CoreRootAPI.CoreRootEntry[]? _initialEntries;
+
     public CoreRootGenerationJob(HttpClient client, Dictionary<string, string> metadata) : base(client, metadata) { }
 
     protected override async Task RunJobCoreAsync()
@@ -61,7 +67,9 @@ internal sealed class CoreRootGenerationJob : JobBase
             _toSkip.Add((entry.Sha, entry.Type));
         }
 
-        SelectCandidateReference(existingEntries);
+        // Which reference is worth reusing depends on the commits this session will actually build, so the
+        // entries are only picked from once BuildCoreRootsAsync knows the range.
+        _initialEntries = existingEntries;
 
         while (true)
         {
@@ -89,11 +97,17 @@ internal sealed class CoreRootGenerationJob : JobBase
     }
 
     /// <summary>
-    /// Picks the reference this session should reuse: the one closest to the tip of history that still has
-    /// capacity left. Selection is by commit time rather than by when the CoreRoot was generated, because
-    /// entries are not necessarily created in commit order.
+    /// Picks the reference this session should reuse: the one closest to <paramref name="oldestCommitTime"/>
+    /// that still has capacity left, out of those older than it. Selection is by commit time rather than by
+    /// when the CoreRoot was generated, because entries are not necessarily created in commit order.
+    /// <para>
+    /// Anything newer than the commits being built is skipped. A session backfilling older commits would
+    /// otherwise adopt the reference at the tip of history, which every commit it builds then rejects for
+    /// being too far away - so it would create fresh references instead of reusing the ones sitting right
+    /// next to the range it is filling in.
+    /// </para>
     /// </summary>
-    private void SelectCandidateReference(CoreRootAPI.CoreRootEntry[] entries)
+    private void SelectCandidateReference(CoreRootAPI.CoreRootEntry[] entries, DateTime oldestCommitTime)
     {
         // How many deltas each reference is already responsible for. Counting the entries that actually
         // point at it is exact and order-independent, unlike "everything created after it".
@@ -104,6 +118,7 @@ internal sealed class CoreRootGenerationJob : JobBase
 
         (CoreRootAPI.CoreRootEntry Entry, int Commits)? best = entries
             .Where(e => string.IsNullOrEmpty(e.PrefixBlobName) && !string.IsNullOrEmpty(e.Url) && !string.IsNullOrEmpty(e.BlobName))
+            .Where(e => e.CommitTime <= oldestCommitTime)
             .Select(e => (Entry: e, Commits: deltasPerReference.GetValueOrDefault(e.BlobName!)))
             .Where(e => e.Commits < MaxCommitsPerReference)
             .OrderByDescending(e => e.Entry.CommitTime)
@@ -190,6 +205,14 @@ internal sealed class CoreRootGenerationJob : JobBase
         commits.Reverse();
 
         await LogAsync($"Found {commits.Count} commits in the last {lastNDays} days");
+
+        // Commits are processed oldest first, so a reference older than the first one is older than every
+        // commit this session builds.
+        if (_initialEntries is { } entries && commits.Count > 0)
+        {
+            _initialEntries = null;
+            SelectCandidateReference(entries, commits[0].CommitTime);
+        }
 
         for (int i = 0; i < commits.Count; i++)
         {
