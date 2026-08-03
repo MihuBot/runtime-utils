@@ -22,8 +22,11 @@ jobs:
         env:
           RUNTIME_UTILS_TOKEN: ${{ secrets.RUNTIME_UTILS_TOKEN }}
         run: |
-          cd Runner
-          dotnet run -c Release "${{ github.event_path }}"
+          # The runner uses its working directory as scratch space (it clones dotnet/runtime
+          # into it), so keep that out of the project directory.
+          New-Item -ItemType Directory -Force -Path ../runner-work
+          cd ../runner-work
+          dotnet run -c Release --project "$env:GITHUB_WORKSPACE/Runner" "${{ github.event_path }}"
 
   run-windows-arm:
     if: (github.actor == 'MihuBot' || github.actor == 'MihaZupan') && contains(github.event.issue.body, 'RUN_AS_GITHUB_ACTION_') && contains(github.event.issue.title, 'ARM64')
@@ -42,5 +45,8 @@ jobs:
         env:
           RUNTIME_UTILS_TOKEN: ${{ secrets.RUNTIME_UTILS_TOKEN }}
         run: |
-          cd Runner
-          dotnet run -c Release "${{ github.event_path }}"
+          # The runner uses its working directory as scratch space (it clones dotnet/runtime
+          # into it), so keep that out of the project directory.
+          New-Item -ItemType Directory -Force -Path ../runner-work
+          cd ../runner-work
+          dotnet run -c Release --project "$env:GITHUB_WORKSPACE/Runner" "${{ github.event_path }}"

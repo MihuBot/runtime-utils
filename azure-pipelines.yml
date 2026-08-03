@@ -14,8 +14,11 @@ stages:
     timeoutInMinutes: 310
     steps:
       - bash: |
-          cd Runner
-          dotnet run -c Release
+          # The runner uses its working directory as scratch space (it clones dotnet/runtime into it),
+          # so keep that out of the project directory - see Runner/Dockerfile for the same split.
+          mkdir -p ../runner-work
+          cd ../runner-work
+          dotnet run -c Release --project "$BUILD_SOURCESDIRECTORY/Runner"
         env:
           JOB_ID: ${{ parameters.MihuBot.job_id }}
           RUNTIME_UTILS_TOKEN: $(RuntimeUtilsToken)

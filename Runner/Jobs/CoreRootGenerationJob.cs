@@ -17,10 +17,11 @@ internal sealed class CoreRootGenerationJob : JobBase
     private int _builtThisSession;
 
     /// <summary>
-    /// Compression is serialized: every delta is produced against <see cref="_referencePrefix"/>, and the
-    /// reference is swapped out once it is too far from the commit being built / used by too many commits.
+    /// Every delta is produced against <see cref="_referencePrefix"/>, which is swapped out once it is too
+    /// far from the commit being built / used by too many commits. The prefix is the whole uncompressed
+    /// reference tarball, so it is only ever held once - compression runs inline between builds rather than
+    /// in the background, so that its allocations never overlap with a runtime build.
     /// </summary>
-    private readonly SemaphoreSlim _compressionLock = new(1, 1);
     private ReadOnlyMemory<byte> _referencePrefix;
     private string? _referenceBlobName;
     private DateTime _referenceCommitTime;
@@ -52,6 +53,7 @@ internal sealed class CoreRootGenerationJob : JobBase
         }
 
         SelectCandidateReference(existingEntries);
+
         while (true)
         {
             int built = _builtThisSession;
@@ -62,7 +64,6 @@ internal sealed class CoreRootGenerationJob : JobBase
                 break;
             }
 
-            await WaitForPendingTasksAsync();
             await RunProcessAsync("git", "checkout main", workDir: "runtime");
             await RunProcessAsync("git", "pull origin", workDir: "runtime");
         }
@@ -124,7 +125,6 @@ internal sealed class CoreRootGenerationJob : JobBase
 
     /// <summary>
     /// Downloads and decompresses <see cref="_candidateReference"/> so that it can be used as a prefix.
-    /// Must be called while holding <see cref="_compressionLock"/>.
     /// </summary>
     private async Task LoadCandidateReferenceAsync(string logPrefix)
     {
@@ -186,12 +186,6 @@ internal sealed class CoreRootGenerationJob : JobBase
                 break;
             }
 
-            if (PendingTasks.Count > 5)
-            {
-                await LogAsync("Waiting for pending tasks before continuing ...");
-                await WaitForPendingTasksAsync(2);
-            }
-
             string progressMessage = $"Processing commit {i + 1}/{commits.Count}. Built {_builtThisSession} in this session.";
             LastProgressSummary = progressMessage;
             await LogAsync(progressMessage);
@@ -246,19 +240,19 @@ internal sealed class CoreRootGenerationJob : JobBase
             string artifactsDir = await CopyArtifactsAsync(logPrefix, commit, type);
             _builtThisSession++;
 
-            PendingTasks.Enqueue(Task.Run(async () =>
+            // Compression is done inline rather than in the background. It briefly needs a multiple of the
+            // CoreRoot size (the reference prefix, plus ZStandard's window), and overlapping that with the
+            // next runtime build is what pushes small runners into the OOM killer.
+            try
             {
-                try
-                {
-                    await CompressUploadAndSaveAsync(logPrefix, commit, commitTime, type, artifactsDir);
+                await CompressUploadAndSaveAsync(logPrefix, commit, commitTime, type, artifactsDir);
 
-                    await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
-                }
-                catch (Exception ex)
-                {
-                    await LogAsync($"[{logPrefix}] Error: {ex}");
-                }
-            }));
+                await LogAsync($"[{logPrefix}] Done in {FormatElapsedTime(stopwatch.Elapsed)}");
+            }
+            catch (Exception ex)
+            {
+                await LogAsync($"[{logPrefix}] Error: {ex}");
+            }
         }
 
         static bool CanSkipBuilding(List<string> changedFiles)
@@ -370,10 +364,6 @@ internal sealed class CoreRootGenerationJob : JobBase
         await CoreRootArchive.CreateTarAsync(artifactsDir, tarPath, JobTimeout);
         Directory.Delete(artifactsDir, recursive: true);
 
-        // A 2 GB compression window is memory hungry and the reference is swapped out below,
-        // so only ever compress one CoreRoot at a time.
-        await _compressionLock.WaitAsync();
-        bool holdsLock = true;
         try
         {
             // Prefer the reference already held in memory; otherwise fall back to the one left over from a
@@ -387,39 +377,30 @@ internal sealed class CoreRootGenerationJob : JobBase
 
             if (CanUseLoadedReference(commitTime))
             {
-                string prefixBlobName = _referenceBlobName!;
-
-                await LogAsync($"[{logPrefix}] Compressing {type} artifacts using '{prefixBlobName}' as the prefix ...");
+                await LogAsync($"[{logPrefix}] Compressing {type} artifacts using '{_referenceBlobName}' as the prefix ...");
 
                 await CoreRootArchive.CompressAsync(tarPath, archivePath, _referencePrefix, JobTimeout);
-                _commitsUsingReference++;
-
                 File.Delete(tarPath);
                 await LogArchiveSizeAsync(logPrefix, archivePath);
 
-                // Deltas don't mutate the reference, so let the next commit start compressing while
-                // this one uploads.
-                _compressionLock.Release();
-                holdsLock = false;
+                await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, _referenceBlobName);
 
-                await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, prefixBlobName);
+                _commitsUsingReference++;
                 return;
             }
 
             await LogAsync($"[{logPrefix}] Compressing {type} artifacts as a new standalone reference ...");
 
             await CoreRootArchive.CompressAsync(tarPath, archivePath, prefix: default, JobTimeout);
-
-            ReadOnlyMemory<byte> prefix = await CoreRootArchive.ReadPrefixAsync(tarPath, JobTimeout);
-            File.Delete(tarPath);
             await LogArchiveSizeAsync(logPrefix, archivePath);
 
-            // Keep holding the lock across the upload: no delta may be produced against a reference that
-            // isn't durably stored yet, and the reference is only adopted once the save has succeeded.
-            // If this throws, the reference is not adopted and the next commit retries as a reference.
+            // The reference is only adopted once it is durably stored - no delta may point at a blob that
+            // failed to upload. If this throws, the next commit simply becomes the reference instead.
             await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, prefixBlobName: null);
 
-            _referencePrefix = prefix;
+            // Drop the old prefix before reading the new one so the two are never held at the same time.
+            _referencePrefix = default;
+            _referencePrefix = await CoreRootArchive.ReadPrefixAsync(tarPath, JobTimeout);
             _referenceBlobName = blobName;
             _referenceCommitTime = commitTime;
             _commitsUsingReference = 0;
@@ -428,11 +409,6 @@ internal sealed class CoreRootGenerationJob : JobBase
         {
             try { File.Delete(tarPath); }
             catch { }
-
-            if (holdsLock)
-            {
-                _compressionLock.Release();
-            }
         }
     }
 
