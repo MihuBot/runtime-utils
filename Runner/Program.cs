@@ -64,7 +64,7 @@ static async Task RunAsync(string[] args)
     {
         DefaultRequestVersion = HttpVersion.Version20,
         BaseAddress = new Uri("https://mihubot.xyz/api/RuntimeUtils/"),
-        Timeout = TimeSpan.FromMinutes(1),
+        Timeout = TimeSpan.FromMinutes(5),
     };
 
     if (!string.IsNullOrEmpty(jobId))
