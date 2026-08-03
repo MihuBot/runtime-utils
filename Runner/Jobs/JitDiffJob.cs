@@ -23,7 +23,7 @@ internal sealed class JitDiffJob : JobBase
         Metadata[nameof(BaseRepo)] = Metadata[nameof(PrRepo)] = "dotnet/runtime";
         Metadata[nameof(BaseBranch)] = Metadata[nameof(PrBranch)] = "main";
 
-        await RunProcessAsync("apt-get", "update");
+        await AptHelper.RunAptGetAsync(this, "update");
 
         int failedBuilds = 0;
 
@@ -135,7 +135,7 @@ internal sealed class JitDiffJob : JobBase
     {
         Task cloneRuntimeTask = RuntimeHelpers.CloneRuntimeAsync(job);
 
-        Task setupZipAndWgetTask = job.RunProcessAsync("apt-get", "install -y zip wget p7zip-full ninja-build", logPrefix: "Setup zip & wget");
+        Task setupZipAndWgetTask = AptHelper.RunAptGetAsync(job, "install -y zip wget p7zip-full ninja-build", logPrefix: "Setup zip & wget");
 
         Task setupJitutilsTask = Task.Run(async () =>
         {

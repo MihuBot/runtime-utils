@@ -14,6 +14,10 @@ internal static class RuntimeHelpers
         ? "-p:RunAnalyzers=false -p:ApiCompatValidateAssemblies=false"
         : "/p:RunAnalyzers=false /p:ApiCompatValidateAssemblies=false";
 
+    private static Task InstallDependenciesAsync(JobBase job, string logPrefix) =>
+        AptHelper.RunWithAptLockAsync(() =>
+            job.RunProcessAsync("bash", "-x eng/common/native/install-dependencies.sh linux", logPrefix: logPrefix, workDir: "runtime"));
+
     public static async Task CloneRuntimeMainAsync(JobBase job)
     {
         const string LogPrefix = "Setup runtime";
@@ -31,13 +35,13 @@ internal static class RuntimeHelpers
                 chmod 777 build.sh
                 git config --global user.email build@build.foo
                 git config --global user.name build
-
-                eng/common/native/install-dependencies.sh linux
                 """;
 
             await job.LogAsync($"Using runtime setup script:\n{script}");
             await File.WriteAllTextAsync("setup-runtime.sh", script);
             await job.RunProcessAsync("bash", "-x setup-runtime.sh", logPrefix: LogPrefix);
+
+            await InstallDependenciesAsync(job, LogPrefix);
         }
         else
         {
@@ -87,10 +91,6 @@ internal static class RuntimeHelpers
                 git switch -c pr
                 """;
 
-            string installDependencies = runtimeAlreadyExists ?
-                "" :
-                "eng/common/native/install-dependencies.sh linux";
-
             string script = UpdateMergePlaceholders(
                 $$$"""
                 set -e
@@ -109,13 +109,16 @@ internal static class RuntimeHelpers
                 {{MERGE_PR_BRANCHES}}
 
                 git switch {{{job.BaseBranch}}}
-
-                {{{installDependencies}}}
                 """);
 
             await job.LogAsync($"Using runtime setup script:\n{script}");
             await File.WriteAllTextAsync("setup-runtime.sh", script);
             await job.RunProcessAsync("bash", "-x setup-runtime.sh", logPrefix: LogPrefix);
+
+            if (!runtimeAlreadyExists)
+            {
+                await InstallDependenciesAsync(job, LogPrefix);
+            }
         }
         else
         {

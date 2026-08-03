@@ -30,7 +30,7 @@ internal sealed class RegexDiffJob : JobBase
         Metadata[nameof(BaseRepo)] = Metadata[nameof(PrRepo)] = "dotnet/runtime";
         Metadata[nameof(BaseBranch)] = Metadata[nameof(PrBranch)] = "main";
 
-        await RunProcessAsync("apt-get", "update");
+        await AptHelper.RunAptGetAsync(this, "update");
 
         int failedBuilds = 0;
 
