@@ -48,8 +48,7 @@ internal static class CoreRootArchive
     {
         var options = new ZstandardCompressionOptions
         {
-            // Quality is left at the default - the prefix does the heavy lifting for deltas, and higher
-            // levels cost a lot of CPU/memory for very little gain on artifacts this size.
+            Quality = ZstandardCompressionOptions.DefaultQuality + 2,
             WindowLog2 = WindowLog2,
             EnableLongDistanceMatching = true,
         };
