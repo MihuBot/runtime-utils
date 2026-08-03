@@ -2,8 +2,8 @@
 
 internal sealed class CoreRootGenerationJob : JobBase
 {
-    /// <summary>How many CoreRoots we compress against a single reference before creating a fresh one.</summary>
-    private const int MaxCommitsPerReference = 20;
+    /// <summary>A safety rail only - <see cref="ShouldKeepDelta"/> normally decides when to stop.</summary>
+    private const int MaxCommitsPerReference = 100;
 
     /// <summary>
     /// How far apart in <em>commit</em> time a reference and a delta may be before a fresh reference is
@@ -26,6 +26,15 @@ internal sealed class CoreRootGenerationJob : JobBase
     private string? _referenceBlobName;
     private DateTime _referenceCommitTime;
     private int _commitsUsingReference;
+
+    /// <summary>The compressed size of the current reference archive - "R" in <see cref="ShouldKeepDelta"/>.</summary>
+    private long _referenceSize;
+
+    /// <summary>
+    /// The total compressed size of the deltas produced against the current reference. Null if the reference
+    /// was inherited from a previous session, which only records how many deltas point at it, not their sizes.
+    /// </summary>
+    private long? _deltaBytesUsingReference;
 
     /// <summary>
     /// A previously uploaded reference that this session may reuse. It is only downloaded once a commit
@@ -147,6 +156,10 @@ internal sealed class CoreRootGenerationJob : JobBase
             _referenceBlobName = candidate.BlobName;
             _referenceCommitTime = candidate.CommitTime;
             _commitsUsingReference = _candidateReferenceCommits;
+            _referenceSize = new FileInfo(archive.Path).Length;
+
+            // Only the delta count survives across sessions, so ShouldKeepDelta has to estimate their sizes.
+            _deltaBytesUsingReference = null;
 
             await LogAsync($"[{logPrefix}] Using '{candidate.BlobName}' as the compression reference.");
         }
@@ -380,19 +393,32 @@ internal sealed class CoreRootGenerationJob : JobBase
                 await LogAsync($"[{logPrefix}] Compressing {type} artifacts using '{_referenceBlobName}' as the prefix ...");
 
                 await CoreRootArchive.CompressAsync(tarPath, archivePath, _referencePrefix, JobTimeout);
-                File.Delete(tarPath);
                 await LogArchiveSizeAsync(logPrefix, archivePath);
 
-                await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, _referenceBlobName);
+                long deltaSize = new FileInfo(archivePath).Length;
 
-                _commitsUsingReference++;
-                return;
+                if (ShouldKeepDelta(deltaSize, out long deltaBytesUsingReference, out double averageBytesPerCoreRoot))
+                {
+                    File.Delete(tarPath);
+
+                    await UploadAndSaveAsync(logPrefix, commit, commitTime, type, blobName, archivePath, _referenceBlobName);
+
+                    _commitsUsingReference++;
+                    _deltaBytesUsingReference = deltaBytesUsingReference + deltaSize;
+                    return;
+                }
+
+                await LogAsync($"[{logPrefix}] The delta is larger than the {ToMB(averageBytesPerCoreRoot)} MB/CoreRoot " +
+                    $"that '{_referenceBlobName}' currently averages over {_commitsUsingReference + 1} CoreRoots - " +
+                    $"recompressing as a new standalone reference instead.");
             }
 
             await LogAsync($"[{logPrefix}] Compressing {type} artifacts as a new standalone reference ...");
 
             await CoreRootArchive.CompressAsync(tarPath, archivePath, prefix: default, JobTimeout);
             await LogArchiveSizeAsync(logPrefix, archivePath);
+
+            long referenceSize = new FileInfo(archivePath).Length;
 
             // The reference is only adopted once it is durably stored - no delta may point at a blob that
             // failed to upload. If this throws, the next commit simply becomes the reference instead.
@@ -404,6 +430,8 @@ internal sealed class CoreRootGenerationJob : JobBase
             _referenceBlobName = blobName;
             _referenceCommitTime = commitTime;
             _commitsUsingReference = 0;
+            _referenceSize = referenceSize;
+            _deltaBytesUsingReference = 0;
         }
         finally
         {
@@ -424,6 +452,37 @@ internal sealed class CoreRootGenerationJob : JobBase
 
     private async Task LogArchiveSizeAsync(string logPrefix, string archivePath)
     {
-        await LogAsync($"[{logPrefix}] Archive size: {new FileInfo(archivePath).Length / (1024d * 1024d):F1} MB");
+        await LogAsync($"[{logPrefix}] Archive size: {ToMB(new FileInfo(archivePath).Length)} MB");
     }
+
+    /// <summary>
+    /// Decides whether a freshly compressed delta is worth keeping, or whether this CoreRoot should be
+    /// recompressed as a new standalone reference instead.
+    /// <para>
+    /// A reference plus its <c>n</c> deltas costs <c>R + ΣDᵢ</c> for <c>n + 1</c> CoreRoots, so one more
+    /// delta lowers the storage bill iff <c>D₍ₙ₊₁₎ &lt; (R + ΣDᵢ) / (n + 1)</c>. Deltas grow as the commit
+    /// drifts away from the reference, so the first delta to fail that test is exactly where a fresh
+    /// reference (assumed to also cost <c>R</c>) becomes cheaper - the greedy test is optimal, not a
+    /// heuristic. A fixed commit count can't be: the optimum is <c>sqrt(2R / a)</c> for deltas growing at
+    /// <c>a</c> bytes per commit, so it moves with how much churn the tree sees.
+    /// </para>
+    /// </summary>
+    /// <param name="deltaBytesUsingReference">
+    /// The resolved <c>ΣDᵢ</c>, which the caller should carry forward once the delta is kept.
+    /// </param>
+    private bool ShouldKeepDelta(long deltaSize, out long deltaBytesUsingReference, out double averageBytesPerCoreRoot)
+    {
+        int commits = _commitsUsingReference;
+
+        // Deltas grow roughly linearly with the distance from the reference, so this one being D₍ₙ₊₁₎ implies
+        // the n before it summed to about n * D₍ₙ₊₁₎ / 2. From here on the sizes are tracked exactly.
+        deltaBytesUsingReference = _deltaBytesUsingReference ?? (deltaSize * commits / 2);
+
+        averageBytesPerCoreRoot = (double)(_referenceSize + deltaBytesUsingReference) / (commits + 1);
+
+        // Falling back to keeping the delta if the reference size is somehow unknown.
+        return _referenceSize <= 0 || deltaSize < averageBytesPerCoreRoot;
+    }
+
+    private static string ToMB(double bytes) => $"{bytes / (1024 * 1024):F1}";
 }
