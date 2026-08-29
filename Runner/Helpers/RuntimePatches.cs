@@ -17,7 +17,7 @@ internal static partial class RuntimePatches
     public static async Task ApplyPatchesAsync(JobBase job)
     {
         HashSet<string> prChangedFiles = new(
-            await GitHelper.GetChangedFilesAsync(job, "main..pr", RuntimeDir),
+            await GitHelper.GetChangedFilesAsync(job, $"{job.BaselineRef}..pr", RuntimeDir),
             StringComparer.OrdinalIgnoreCase);
 
         await TryPatchMarvinAsync(job, prChangedFiles);

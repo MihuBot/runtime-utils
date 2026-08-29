@@ -31,10 +31,10 @@ public abstract class JobBase
 
     private DateTime _maxEndTime;
     protected DateTime StartTime { get; private set; }
-    protected CancellationToken JobTimeout => _jobCts.Token;
+    protected internal CancellationToken JobTimeout => _jobCts.Token;
     protected TimeSpan MaxRemainingTime => _maxEndTime - DateTime.UtcNow;
 
-    protected readonly HttpClient HttpClient;
+    protected internal readonly HttpClient HttpClient;
     public Dictionary<string, string> Metadata { get; private set; }
     public readonly string OriginalWorkingDirectory = Environment.CurrentDirectory;
 
@@ -47,8 +47,11 @@ public abstract class JobBase
     public string CustomArguments => Metadata.TryGetValue(nameof(CustomArguments), out string? args) ? args : string.Empty;
     public string BaseRepo => Metadata[nameof(BaseRepo)];
     public string BaseBranch => Metadata[nameof(BaseBranch)];
+    public string? BaseCommit => Metadata.GetValueOrDefault(nameof(BaseCommit));
+    public string BaselineRef => BaseCommit is null ? BaseBranch : "baseline";
     public string PrRepo => Metadata[nameof(PrRepo)];
     public string PrBranch => Metadata[nameof(PrBranch)];
+    public bool HasPatch => Metadata.ContainsKey(nameof(HasPatch));
 
     public bool TryGetFlag(string name) => CustomArguments.Contains($"-{name}", StringComparison.OrdinalIgnoreCase);
 

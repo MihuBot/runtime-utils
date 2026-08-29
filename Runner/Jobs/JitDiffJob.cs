@@ -255,7 +255,7 @@ internal sealed class JitDiffJob : JobBase
                 bool clr = false;
                 bool libs = false;
 
-                foreach (string file in await GitHelper.GetChangedFilesAsync(job, "main", "runtime"))
+                foreach (string file in await GitHelper.GetChangedFilesAsync(job, job.BaselineRef, "runtime"))
                 {
                     if (file.Contains("/System.Private.CoreLib/", StringComparison.OrdinalIgnoreCase))
                     {

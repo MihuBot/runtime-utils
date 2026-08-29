@@ -67,6 +67,7 @@ internal static class RuntimeHelpers
         const string LogPrefix = "Setup runtime";
 
         bool runtimeAlreadyExists = Directory.Exists("runtime");
+        string baselineBranch = job.BaseCommit is null ? job.BaseBranch : "baseline";
 
         if (OperatingSystem.IsLinux())
         {
@@ -102,13 +103,15 @@ internal static class RuntimeHelpers
                 git config --global user.email build@build.foo
                 git config --global user.name build
 
+                {{CHECKOUT_BASE_COMMIT}}
+
                 {{MERGE_BASELINE_BRANCHES}}
 
                 {{{createPrBranch}}}
 
                 {{MERGE_PR_BRANCHES}}
 
-                git switch {{{job.BaseBranch}}}
+                git switch {{{baselineBranch}}}
                 """);
 
             await job.LogAsync($"Using runtime setup script:\n{script}");
@@ -137,13 +140,15 @@ internal static class RuntimeHelpers
                 git config --global user.email build@build.foo
                 git config --global user.name build
 
+                {{CHECKOUT_BASE_COMMIT}}
+
                 {{MERGE_BASELINE_BRANCHES}}
 
                 git switch -c pr
 
                 {{MERGE_PR_BRANCHES}}
 
-                git switch {{{job.BaseBranch}}}
+                git switch {{{baselineBranch}}}
                 """);
 
             await job.LogAsync($"Using runtime setup script:\n{script}");
@@ -151,16 +156,29 @@ internal static class RuntimeHelpers
             await job.RunProcessAsync("clone-runtime.bat", string.Empty, logPrefix: LogPrefix);
         }
 
-        await job.LogAsync($"main commit: {await GitHelper.GetCurrentCommitAsync(job, "runtime", $"origin/{job.BaseBranch}")}");
-        await job.LogAsync($"pr commit: {await GitHelper.GetCurrentCommitAsync(job, "runtime", $"combineWith1/{job.PrBranch}")}");
+        if (job.HasPatch)
+        {
+            await ApplyPatchAsync(job);
+        }
+
+        await job.LogAsync($"main commit: {await GitHelper.GetCurrentCommitAsync(job, "runtime", baselineBranch)}");
+        await job.LogAsync($"pr commit: {await GitHelper.GetCurrentCommitAsync(job, "runtime", "pr")}");
 
         string UpdateMergePlaceholders(string template)
         {
             return template
                 .ReplaceLineEndings()
+                .Replace("{{CHECKOUT_BASE_COMMIT}}", GetBaseCommitScript(), StringComparison.Ordinal)
                 .Replace("{{MERGE_BASELINE_BRANCHES}}", GetMergeScript("dependsOn"), StringComparison.Ordinal)
                 .Replace("{{MERGE_PR_BRANCHES}}", GetMergeScript("combineWith"), StringComparison.Ordinal);
         }
+
+        string GetBaseCommitScript() =>
+            job.BaseCommit is null ? string.Empty :
+            $"""
+            git fetch origin {job.BaseCommit}
+            git switch -C {baselineBranch} {job.BaseCommit}
+            """;
 
         string GetMergeScript(string name)
         {
@@ -168,7 +186,7 @@ internal static class RuntimeHelpers
 
             List<(string Repo, string Branch)> prList = new(GetPRList(job, name));
 
-            if (name == "combineWith")
+            if (name == "combineWith" && !job.HasPatch)
             {
                 prList.Insert(0, (job.PrRepo, job.PrBranch));
             }
@@ -201,6 +219,27 @@ internal static class RuntimeHelpers
 
             return [];
         }
+    }
+
+    private static async Task ApplyPatchAsync(JobBase job)
+    {
+        string patchPath = Path.GetFullPath("changes.patch");
+
+        using (HttpResponseMessage response = await job.HttpClient.GetAsync($"Jobs/Patch?jobId={job.JobId}", job.JobTimeout))
+        {
+            response.EnsureSuccessStatusCode();
+            await using Stream source = await response.Content.ReadAsStreamAsync(job.JobTimeout);
+            await using FileStream destination = File.Create(patchPath);
+            await source.CopyToAsync(destination, job.JobTimeout);
+        }
+
+        await job.LogAsync("Applying submitted patch");
+        await job.RunProcessAsync("git", "switch pr", workDir: "runtime");
+        await job.RunProcessAsync("git", $"apply --index --whitespace=nowarn \"{patchPath}\"", workDir: "runtime");
+        await job.RunProcessAsync("git", "diff --cached --stat", logPrefix: "Patch summary", workDir: "runtime");
+        await job.RunProcessAsync("git", "commit -m \"Apply submitted patch\"", workDir: "runtime");
+        string baselineBranch = job.BaseCommit is null ? job.BaseBranch : "baseline";
+        await job.RunProcessAsync("git", $"switch {baselineBranch}", workDir: "runtime");
     }
 
     public static async Task InstallRuntimeDotnetSdkAsync(JobBase job, string? installDir = null)

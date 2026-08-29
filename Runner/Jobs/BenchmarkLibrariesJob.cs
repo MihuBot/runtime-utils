@@ -10,7 +10,8 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
     {
         CoreRootAPI.CoreRootEntry[]? entries = null;
 
-        if (BenchmarkWithCompareRangeRegex().Match(CustomArguments) is { Success: true } rangeMatch)
+        if (!HasPatch &&
+            BenchmarkWithCompareRangeRegex().Match(CustomArguments) is { Success: true } rangeMatch)
         {
             entries = await CoreRootAPI.ListAsync(this, rangeMatch.Groups[2].Value, "release");
 

@@ -41,7 +41,6 @@ internal static class GitHelper
             $"diff --name-only {baselineRef}",
             lines,
             workDir: workDir,
-            checkExitCode: false,
             suppressOutputLogs: true,
             suppressStartingLog: true);
 
