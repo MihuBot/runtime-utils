@@ -461,7 +461,8 @@ public abstract class JobBase
 
         foreach ((string key, string value) in envVars)
         {
-            startInfo.EnvironmentVariables.Add(key, value);
+            // Assign rather than Add so that callers can override variables we inherited from the environment.
+            startInfo.EnvironmentVariables[key] = value;
         }
 
         using var process = new Process

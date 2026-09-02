@@ -346,10 +346,11 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
         // dotnet/performance) makes the whole process exit with an error, but BenchmarkDotNet still
         // produces report files for everything that did run. We want to report those partial results
         // and note the failure rather than throwing away potentially hours of work.
-        int exitCode = await RunProcessAsync("/usr/lib/dotnet/dotnet",
+        int exitCode = await RunProcessAsync($"{DotnetHelpers.DefaultInstallPath}/dotnet",
             $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
             checkExitCode: false,
+            envVars: DotnetHelpers.GetSdkEnvVars(),
             processLogs: line =>
             {
                 // Example:

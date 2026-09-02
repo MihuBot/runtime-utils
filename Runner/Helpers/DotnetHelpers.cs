@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Nodes;
+﻿using System.Runtime.InteropServices;
+using System.Text.Json.Nodes;
 
 internal static class DotnetHelpers
 {
@@ -56,6 +57,34 @@ internal static class DotnetHelpers
 
     public static async Task InstallDotnetDailySdkAsync(JobBase job, int version, string? installDir = null) =>
         await InstallDotnetSdkAsyncCore(job, $"--channel {version}.0 --quality daily", installDir);
+
+    /// <summary>
+    /// Environment variables that point child processes at the SDK we installed into <paramref name="installDir"/>.
+    /// </summary>
+    /// <remarks>
+    /// The machines we run on already have another .NET install (e.g. /usr/local/dotnet on Helix, which is also
+    /// first on PATH), and it is generally older than the daily SDK the job installs. Running
+    /// "{installDir}/dotnet run" only controls which SDK/muxer builds the app - the apphost it then launches
+    /// resolves its shared framework through DOTNET_ROOT / PATH / the default install location, so it can pick
+    /// the older install and fail to start with "You must install or update .NET to run this application".
+    /// Pinning DOTNET_ROOT and prepending the install directory to PATH keeps the whole process tree on one install.
+    /// </remarks>
+    public static List<(string, string)> GetSdkEnvVars(string? installDir = null)
+    {
+        installDir ??= DefaultInstallPath;
+
+        string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+        char separator = OperatingSystem.IsWindows() ? ';' : ':';
+
+        return
+        [
+            ("DOTNET_ROOT", installDir),
+            // The arch-specific variable takes precedence over DOTNET_ROOT in the apphost, so it has to
+            // be overridden too - otherwise a stale one in the environment would defeat the pin above.
+            ($"DOTNET_ROOT_{RuntimeInformation.ProcessArchitecture.ToString().ToUpperInvariant()}", installDir),
+            ("PATH", string.IsNullOrEmpty(path) ? installDir : $"{installDir}{separator}{path}"),
+        ];
+    }
 
     public static async Task<string> GetInstalledDotnetSdkVersionAsync(JobBase job, string? installDir = null)
     {
