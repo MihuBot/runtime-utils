@@ -231,11 +231,11 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
             await Parallel.ForAsync(0, parallelism, async (index, ct) =>
             {
                 string coreRoot = "artifacts-main";
-                const string CheckedClr = "clr-checked-main";
+                const string BaseClr = "artifacts-main/jit-base";
 
                 if (index > 0)
                 {
-                    // jit-diff only reads the base JIT from CheckedClr, so every worker shares one copy.
+                    // jit-diff only reads the base JIT from BaseClr, so every worker shares one copy.
                     // Only the core_root is mutated (jit-diff installs the JIT into it in place), so give
                     // each worker a cheap linked clone with a private copy of just the JIT.
                     coreRoot = $"{coreRoot}_{index}";
@@ -293,7 +293,7 @@ internal sealed class NuGetExtraAssembliesJob : JobBase
                                     using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                                     cts.CancelAfter(TimeSpan.FromMinutes(5));
 
-                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, CheckedClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id, cancellationToken: cts.Token);
+                                    await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, coreRoot, BaseClr, pkgDiffDir, [dllPath], logPrefix: pkg.Id, cancellationToken: cts.Token);
                                 }
                             }
                             catch

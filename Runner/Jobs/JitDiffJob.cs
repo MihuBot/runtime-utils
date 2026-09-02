@@ -58,7 +58,7 @@ internal sealed class JitDiffJob : JobBase
                     continue;
                 }
 
-                await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory);
+                await JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "artifacts-main/jit-base", DiffsMainDirectory);
 
                 await RuntimeHelpers.InstallRuntimeDotnetSdkAsync(this);
 
@@ -82,7 +82,6 @@ internal sealed class JitDiffJob : JobBase
     private static void DeleteBuildArtifactsForMain()
     {
         DeleteAndCreateEmptyDir("artifacts-main");
-        DeleteAndCreateEmptyDir("clr-checked-main");
         DeleteAndCreateEmptyDir(DiffsMainDirectory);
 
         static void DeleteAndCreateEmptyDir(string path)
@@ -169,8 +168,6 @@ internal sealed class JitDiffJob : JobBase
         {
             Directory.CreateDirectory("artifacts-main");
             Directory.CreateDirectory("artifacts-pr");
-            Directory.CreateDirectory("clr-checked-main");
-            Directory.CreateDirectory("clr-checked-pr");
             Directory.CreateDirectory("jit-diffs");
             Directory.CreateDirectory(DiffsDirectory);
             Directory.CreateDirectory(DiffsMainDirectory);
@@ -184,7 +181,7 @@ internal sealed class JitDiffJob : JobBase
         await cloneRuntimeTask;
     }
 
-    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool buildChecked = true, bool canSkipRebuild = true)
+    public static async Task BuildAndCopyRuntimeBranchBitsAsync(JobBase job, string branch, bool uploadArtifacts = true, bool copyJitDiffBase = true, bool canSkipRebuild = true)
     {
         canSkipRebuild &= !ForceRebuildAll();
         canSkipRebuild &= branch == "pr";
@@ -214,29 +211,20 @@ internal sealed class JitDiffJob : JobBase
         {
             await job.RunProcessAsync("bash", $"build.sh {targets} -c Release {RuntimeHelpers.LibrariesExtraBuildArgs}", logPrefix: $"{branch} release", workDir: "runtime");
 
-            Task copyReleaseBitsTask = RuntimeHelpers.CopyReleaseArtifactsAsync(job, $"{branch} release", $"artifacts-{branch}");
+            string artifactsDirectory = $"artifacts-{branch}";
+            await RuntimeHelpers.CopyReleaseArtifactsAsync(job, $"{branch} release", artifactsDirectory);
 
-            if (buildChecked)
+            if (copyJitDiffBase)
             {
-                if (rebuildClr)
-                {
-                    await job.RunProcessAsync("bash", "build.sh clr.jit -c Checked", logPrefix: $"{branch} checked", workDir: "runtime");
-                }
-
-                await job.RunProcessAsync("cp", $"-r runtime/artifacts/bin/coreclr/linux.{Arch}.Checked/. clr-checked-{branch}", logPrefix: $"{branch} checked");
+                string jitBaseDirectory = Path.Combine(artifactsDirectory, "jit-base");
+                Directory.CreateDirectory(jitBaseDirectory);
+                File.Copy(Path.Combine(artifactsDirectory, "libclrjit.so"), Path.Combine(jitBaseDirectory, "libclrjit.so"), overwrite: true);
             }
 
             if (uploadArtifacts)
             {
-                job.PendingTasks.Enqueue(job.SevenZipAndUploadArtifactAsync($"build-artifacts-{branch}", $"artifacts-{branch}"));
-
-                if (buildChecked)
-                {
-                    job.PendingTasks.Enqueue(job.SevenZipAndUploadArtifactAsync($"build-clr-checked-{branch}", $"clr-checked-{branch}"));
-                }
+                job.PendingTasks.Enqueue(job.SevenZipAndUploadArtifactAsync($"build-artifacts-{branch}", artifactsDirectory));
             }
-
-            await copyReleaseBitsTask;
         }
         finally
         {
@@ -357,8 +345,8 @@ internal sealed class JitDiffJob : JobBase
         try
         {
             await Task.WhenAll(
-                skipMain ? Task.CompletedTask : JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "clr-checked-main", DiffsMainDirectory),
-                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "clr-checked-pr", DiffsPrDirectory));
+                skipMain ? Task.CompletedTask : JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-main", "artifacts-main/jit-base", DiffsMainDirectory),
+                JitDiffUtils.RunJitDiffOnFrameworksAsync(this, "artifacts-pr", "artifacts-pr/jit-base", DiffsPrDirectory));
 
             await Task.WhenAll(
                 RuntimeHelpers.CopyAspNetSharedFrameworkToCoreRootAsync(this, "artifacts-main"),
@@ -367,8 +355,8 @@ internal sealed class JitDiffJob : JobBase
             int memoryAvailableGB = GetRemainingSystemMemoryGB();
 
             List<ExtraAssemblyDiffFailure>[] failuresByBranch = await Task.WhenAll(
-                DiffExtraProjectsAsync("artifacts-main", "clr-checked-main", DiffsMainDirectory, memoryAvailableGB),
-                DiffExtraProjectsAsync("artifacts-pr", "clr-checked-pr", DiffsPrDirectory, memoryAvailableGB));
+                DiffExtraProjectsAsync("artifacts-main", "artifacts-main/jit-base", DiffsMainDirectory, memoryAvailableGB),
+                DiffExtraProjectsAsync("artifacts-pr", "artifacts-pr/jit-base", DiffsPrDirectory, memoryAvailableGB));
 
             extraAssemblyFailures.AddRange(failuresByBranch.SelectMany(branchFailures => branchFailures));
         }
@@ -396,7 +384,7 @@ internal sealed class JitDiffJob : JobBase
 
         return diffAnalyzeSummary;
 
-        async Task<List<ExtraAssemblyDiffFailure>> DiffExtraProjectsAsync(string coreRootFolder, string checkedClrFolder, string outputFolder, int memoryAvailableGB)
+        async Task<List<ExtraAssemblyDiffFailure>> DiffExtraProjectsAsync(string coreRootFolder, string baseClrFolder, string outputFolder, int memoryAvailableGB)
         {
             var failures = new List<ExtraAssemblyDiffFailure>();
 
@@ -442,7 +430,7 @@ internal sealed class JitDiffJob : JobBase
 
                 if (index > 0)
                 {
-                    // jit-diff only reads the base JIT from checkedClrFolder, so every worker shares one
+                    // jit-diff only reads the base JIT from baseClrFolder, so every worker shares one
                     // copy. Only the core_root is mutated (jit-diff installs the JIT into it in place), so
                     // give each worker a cheap linked clone with a private copy of just the JIT.
                     newCoreRootFolder = $"{newCoreRootFolder}_{index}";
@@ -491,7 +479,7 @@ internal sealed class JitDiffJob : JobBase
 
                     try
                     {
-                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, checkedClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {projectName}", output: jitDiffOutput);
+                        await JitDiffUtils.RunJitDiffOnAssembliesAsync(this, newCoreRootFolder, baseClrFolder, outputFolder, assemblyPaths, logPrefix: $"{branch} {projectName}", output: jitDiffOutput);
                     }
                     catch (Exception ex)
                     {

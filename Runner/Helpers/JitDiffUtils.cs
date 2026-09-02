@@ -64,16 +64,16 @@ internal static partial class JitDiffUtils
         [MarshalAs(UnmanagedType.LPUTF8Str)] string oldPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string newPath);
 
-    public static async Task RunJitDiffOnFrameworksAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder)
+    public static async Task RunJitDiffOnFrameworksAsync(JobBase job, string coreRootFolder, string baseClrFolder, string outputFolder)
     {
-        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, "--frameworks");
+        await RunJitDiffAsync(job, coreRootFolder, baseClrFolder, outputFolder, "--frameworks");
     }
 
-    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
+    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string baseClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfZero(assemblyPaths.Length);
 
-        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, output, cancellationToken);
+        await RunJitDiffAsync(job, coreRootFolder, baseClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, output, cancellationToken);
     }
 
     // jit-diff prints a line like "Error running <corerun> on <assembly path>" for every assembly whose
@@ -94,7 +94,7 @@ internal static partial class JitDiffUtils
     [GeneratedRegex(@"Error running \S+ on (.+)$")]
     private static partial Regex JitDiffAssemblyFailureRegex();
 
-    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
+    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string baseClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
     {
         bool useCctors = !job.TryGetFlag("nocctors");
         bool useTier0 = job.TryGetFlag("tier0");
@@ -128,7 +128,7 @@ internal static partial class JitDiffUtils
                 $"--output {outputFolder} " +
                 $"{frameworksOrAssembly} --pmi " +
                 $"--core_root {coreRootFolder} " +
-                $"--base {checkedClrFolder}",
+                $"--base {baseClrFolder}",
                 output: output,
                 logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
                 envVars: envVars,

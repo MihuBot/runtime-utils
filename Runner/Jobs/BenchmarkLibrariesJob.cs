@@ -39,13 +39,13 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
 
             await clonePerformanceTask;
 
-            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: false);
+            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, copyJitDiffBase: false);
 
             await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
             try
             {
-                await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false);
+                await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, copyJitDiffBase: false);
             }
             catch
             {
@@ -59,7 +59,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                     await RunProcessAsync("git", "clean -fdx", workDir: "runtime", checkExitCode: false);
                 }
 
-                await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: false, canSkipRebuild: false);
+                await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, copyJitDiffBase: false, canSkipRebuild: false);
             }
 
             coreRuns = ["artifacts-main/corerun", "artifacts-pr/corerun"];
