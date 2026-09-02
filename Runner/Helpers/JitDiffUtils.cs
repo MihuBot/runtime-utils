@@ -383,6 +383,7 @@ internal static partial class JitDiffUtils
         bool foundPrefix = false;
         bool foundSuffix = false;
         byte[] prefix = Encoding.ASCII.GetBytes($"; Assembly listing for method {methodName}");
+        byte[] methodPrefix = Encoding.ASCII.GetBytes("; Assembly listing for method ");
         byte[] suffix = Encoding.ASCII.GetBytes("; ============================================================");
 
         StringBuilder sb = new();
@@ -403,7 +404,12 @@ internal static partial class JitDiffUtils
 
                     ProcessLine(
                         line.IsSingleSegment ? line.FirstSpan : line.ToArray(),
-                        prefix, suffix, ref foundPrefix, ref foundSuffix);
+                        prefix, methodPrefix, suffix, ref foundPrefix, ref foundSuffix);
+
+                    if (foundSuffix)
+                    {
+                        return sb.ToString();
+                    }
 
                     if (foundPrefix)
                     {
@@ -415,29 +421,38 @@ internal static partial class JitDiffUtils
                         }
                     }
 
-                    if (foundSuffix)
-                    {
-                        return sb.ToString();
-                    }
-
                     buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
                 }
             }
             while (position != null);
 
+            if (result.IsCompleted && !buffer.IsEmpty)
+            {
+                var line = buffer;
+
+                ProcessLine(
+                    line.IsSingleSegment ? line.FirstSpan : line.ToArray(),
+                    prefix, methodPrefix, suffix, ref foundPrefix, ref foundSuffix);
+
+                if (!foundSuffix && foundPrefix)
+                {
+                    sb.AppendLine(Encoding.UTF8.GetString(line));
+                }
+            }
+
             pipe.AdvanceTo(buffer.Start, buffer.End);
 
             if (result.IsCompleted)
             {
-                return string.Empty;
+                return foundPrefix ? sb.ToString() : string.Empty;
             }
         }
 
-        static void ProcessLine(ReadOnlySpan<byte> line, byte[] prefix, byte[] suffix, ref bool foundPrefix, ref bool foundSuffix)
+        static void ProcessLine(ReadOnlySpan<byte> line, byte[] prefix, byte[] methodPrefix, byte[] suffix, ref bool foundPrefix, ref bool foundSuffix)
         {
             if (foundPrefix)
             {
-                if (line.StartsWith(suffix))
+                if (line.StartsWith(methodPrefix) || line.StartsWith(suffix))
                 {
                     foundSuffix = true;
                 }
