@@ -64,16 +64,16 @@ internal static partial class JitDiffUtils
         [MarshalAs(UnmanagedType.LPUTF8Str)] string oldPath,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string newPath);
 
-    public static async Task RunJitDiffOnFrameworksAsync(JobBase job, string coreRootFolder, string baseClrFolder, string outputFolder)
+    public static async Task RunJitDiffOnFrameworksAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder)
     {
-        await RunJitDiffAsync(job, coreRootFolder, baseClrFolder, outputFolder, "--frameworks");
+        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, "--frameworks");
     }
 
-    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string baseClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
+    public static async Task RunJitDiffOnAssembliesAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string[] assemblyPaths, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfZero(assemblyPaths.Length);
 
-        await RunJitDiffAsync(job, coreRootFolder, baseClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, output, cancellationToken);
+        await RunJitDiffAsync(job, coreRootFolder, checkedClrFolder, outputFolder, string.Join(' ', assemblyPaths.Select(path => $"--assembly \"{path}\"")), logPrefix, output, cancellationToken);
     }
 
     // jit-diff prints a line like "Error running <corerun> on <assembly path>" for every assembly whose
@@ -94,7 +94,7 @@ internal static partial class JitDiffUtils
     [GeneratedRegex(@"Error running \S+ on (.+)$")]
     private static partial Regex JitDiffAssemblyFailureRegex();
 
-    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string baseClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
+    private static async Task RunJitDiffAsync(JobBase job, string coreRootFolder, string checkedClrFolder, string outputFolder, string frameworksOrAssembly, string? logPrefix = null, List<string>? output = null, CancellationToken cancellationToken = default)
     {
         bool useCctors = !job.TryGetFlag("nocctors");
         bool useTier0 = job.TryGetFlag("tier0");
@@ -128,7 +128,7 @@ internal static partial class JitDiffUtils
                 $"--output {outputFolder} " +
                 $"{frameworksOrAssembly} --pmi " +
                 $"--core_root {coreRootFolder} " +
-                $"--base {baseClrFolder}",
+                $"--base {checkedClrFolder}",
                 output: output,
                 logPrefix: $"jit-diff {logPrefix ?? coreRootFolder}",
                 envVars: envVars,
@@ -383,7 +383,6 @@ internal static partial class JitDiffUtils
         bool foundPrefix = false;
         bool foundSuffix = false;
         byte[] prefix = Encoding.ASCII.GetBytes($"; Assembly listing for method {methodName}");
-        byte[] methodPrefix = Encoding.ASCII.GetBytes("; Assembly listing for method ");
         byte[] suffix = Encoding.ASCII.GetBytes("; ============================================================");
 
         StringBuilder sb = new();
@@ -404,12 +403,7 @@ internal static partial class JitDiffUtils
 
                     ProcessLine(
                         line.IsSingleSegment ? line.FirstSpan : line.ToArray(),
-                        prefix, methodPrefix, suffix, ref foundPrefix, ref foundSuffix);
-
-                    if (foundSuffix)
-                    {
-                        return sb.ToString();
-                    }
+                        prefix, suffix, ref foundPrefix, ref foundSuffix);
 
                     if (foundPrefix)
                     {
@@ -421,38 +415,29 @@ internal static partial class JitDiffUtils
                         }
                     }
 
+                    if (foundSuffix)
+                    {
+                        return sb.ToString();
+                    }
+
                     buffer = buffer.Slice(buffer.GetPosition(1, position.Value));
                 }
             }
             while (position != null);
 
-            if (result.IsCompleted && !buffer.IsEmpty)
-            {
-                var line = buffer;
-
-                ProcessLine(
-                    line.IsSingleSegment ? line.FirstSpan : line.ToArray(),
-                    prefix, methodPrefix, suffix, ref foundPrefix, ref foundSuffix);
-
-                if (!foundSuffix && foundPrefix)
-                {
-                    sb.AppendLine(Encoding.UTF8.GetString(line));
-                }
-            }
-
             pipe.AdvanceTo(buffer.Start, buffer.End);
 
             if (result.IsCompleted)
             {
-                return foundPrefix ? sb.ToString() : string.Empty;
+                return string.Empty;
             }
         }
 
-        static void ProcessLine(ReadOnlySpan<byte> line, byte[] prefix, byte[] methodPrefix, byte[] suffix, ref bool foundPrefix, ref bool foundSuffix)
+        static void ProcessLine(ReadOnlySpan<byte> line, byte[] prefix, byte[] suffix, ref bool foundPrefix, ref bool foundSuffix)
         {
             if (foundPrefix)
             {
-                if (line.StartsWith(methodPrefix) || line.StartsWith(suffix))
+                if (line.StartsWith(suffix))
                 {
                     foundSuffix = true;
                 }

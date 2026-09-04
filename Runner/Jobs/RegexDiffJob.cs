@@ -44,7 +44,7 @@ internal sealed class RegexDiffJob : JobBase
             {
                 try
                 {
-                    await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, copyJitDiffBase: true);
+                    await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: true);
                     failedBuilds = 0;
                 }
                 catch when (failedBuilds <= 10)
@@ -102,14 +102,14 @@ internal sealed class RegexDiffJob : JobBase
 
         if (!mainAlreadyBuilt)
         {
-            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, copyJitDiffBase: runJitDiff);
+            await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "main", uploadArtifacts: false, buildChecked: runJitDiff);
 
             _mainSources = await RunSourceGeneratorOnKnownPatternsAsync("main");
         }
 
         await RunProcessAsync("git", "switch pr", workDir: "runtime");
 
-        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, copyJitDiffBase: runJitDiff);
+        await JitDiffJob.BuildAndCopyRuntimeBranchBitsAsync(this, "pr", uploadArtifacts: false, buildChecked: runJitDiff);
 
         var prSources = await RunSourceGeneratorOnKnownPatternsAsync("pr");
 
@@ -600,8 +600,8 @@ internal sealed class RegexDiffJob : JobBase
         string[] prAssemblies = await GenerateRegexAssembliesAsync(baseline: false);
 
         await Task.WhenAll(
-            JitDiffUtils.RunJitDiffOnAssembliesAsync(this, "artifacts-main", "artifacts-main/jit-base", JitDiffJob.DiffsMainDirectory, mainAssemblies),
-            JitDiffUtils.RunJitDiffOnAssembliesAsync(this, "artifacts-pr", "artifacts-pr/jit-base", JitDiffJob.DiffsPrDirectory, prAssemblies));
+            JitDiffUtils.RunJitDiffOnAssembliesAsync(this, "artifacts-main", "clr-checked-main", JitDiffJob.DiffsMainDirectory, mainAssemblies),
+            JitDiffUtils.RunJitDiffOnAssembliesAsync(this, "artifacts-pr", "clr-checked-pr", JitDiffJob.DiffsPrDirectory, prAssemblies));
 
         PendingTasks.Enqueue(ZipAndUploadArtifactAsync("jit-diffs", JitDiffJob.DiffsDirectory));
 
