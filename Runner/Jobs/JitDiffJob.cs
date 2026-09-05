@@ -127,8 +127,9 @@ internal sealed class JitDiffJob : JobBase
 
         string diffAnalyzeSummary = await CollectFrameworksDiffsAsync(skipMain: mainAlreadyBuilt);
 
-        await UploadJitDiffExamplesAsync(diffAnalyzeSummary, regressions: true);
-        await UploadJitDiffExamplesAsync(diffAnalyzeSummary, regressions: false);
+        DiffExamples examples = await DiffExamples.CreateJitAsync(this, CombinedDasmMainDirectory, CombinedDasmPrDirectory);
+        examples.Summary += $"\n\n{diffAnalyzeSummary}";
+        await UploadTextArtifactAsync("JitDiffExamples.json", JsonSerializer.Serialize(examples));
     }
 
     public static async Task CloneRuntimeAndSetupToolsAsync(JobBase job)
@@ -678,38 +679,5 @@ internal sealed class JitDiffJob : JobBase
         // Post a comment (summary only, no verbose output) when the PR is the likely cause; the full report
         // always goes to the tracking issue.
         await ReportUserVisibleErrorAsync(summaryMarkdown, details: detailsMarkdown, postComment: likelyCausedByPr);
-    }
-
-    private async Task UploadJitDiffExamplesAsync(string diffAnalyzeSummary, bool regressions)
-    {
-        var (diffs, noisyDiffsRemoved) = await JitDiffUtils.GetDiffMarkdownAsync(
-            this,
-            JitDiffUtils.ParseDiffAnalyzeEntries(diffAnalyzeSummary, regressions),
-            CombinedDasmMainDirectory,
-            CombinedDasmPrDirectory,
-            tryGetExtraInfo: null,
-            replaceMethodName: name => name,
-            maxCount: 20);
-
-        string changes = JitDiffUtils.GetCommentMarkdown(diffs, GitHubHelpers.CommentLengthLimit, regressions, out bool truncated);
-
-        await LogAsync($"Found {diffs.Length} changes, comment length={changes.Length} for {nameof(regressions)}={regressions}");
-
-        if (changes.Length != 0)
-        {
-            if (noisyDiffsRemoved)
-            {
-                changes = $"{changes}\n\nNote: some changes were skipped as they were likely noise.";
-            }
-
-            PendingTasks.Enqueue(UploadTextArtifactAsync($"ShortDiffs{(regressions ? "Regressions" : "Improvements")}.md", changes));
-
-            if (truncated)
-            {
-                changes = JitDiffUtils.GetCommentMarkdown(diffs, GitHubHelpers.GistLengthLimit, regressions, out _);
-
-                PendingTasks.Enqueue(UploadTextArtifactAsync($"LongDiffs{(regressions ? "Regressions" : "Improvements")}.md", changes));
-            }
-        }
     }
 }

@@ -4,18 +4,23 @@ namespace Runner.Helpers;
 
 internal static class GitHelper
 {
-    public static async Task<List<string>> DiffAsync(JobBase job, string leftFile, string rightFile, bool fullContext = false)
+    public static async Task<List<string>> DiffAsync(JobBase job, string leftFile, string rightFile, bool fullContext = false, bool preserveHunkHeaders = false)
     {
         List<string> lines = [];
 
-        await job.RunProcessAsync("git",
-            $"diff --no-index --histogram {(fullContext ? "-U1000000" : "")} {leftFile} {rightFile}",
+        int exitCode = await job.RunProcessAsync("git",
+            $"diff --no-index --histogram {(fullContext ? "-U1000000" : "")} \"{leftFile}\" \"{rightFile}\"",
             lines,
             checkExitCode: false,
             suppressOutputLogs: true,
             suppressStartingLog: true);
 
-        lines.RemoveAll(ShouldSkipLine);
+        if (exitCode is not (0 or 1))
+        {
+            throw new InvalidOperationException($"git diff failed with exit code {exitCode}.");
+        }
+
+        lines.RemoveAll(line => ShouldSkipLine(line) && !(preserveHunkHeaders && line.StartsWith("@@", StringComparison.Ordinal)));
 
         return lines;
     }

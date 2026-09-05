@@ -68,17 +68,19 @@ Artifact names are consumed by each server job's `InterceptArtifactAsync`, not m
 
 | Job | Server-consumed output or metadata |
 | --- | --- |
-| JitDiff | `diff-frameworks.txt`, `ShortDiffsRegressions.md`/`ShortDiffsImprovements.md`, and corresponding `LongDiffs...` files drive reports; metadata supplies full/subset extra-assembly URLs. |
+| JitDiff | `JitDiffExamples.json` drives the hosted diff browser; `diff-frameworks.txt` contains the analyzer output. Metadata supplies full/subset extra-assembly URLs. |
 | BenchmarkLibraries | Case-sensitive `results.md` becomes the benchmark report/comment. |
-| RegexDiff | `JitAnalyzeSummary.txt`, `ShortExampleDiffs.md`, `LongExampleDiffs.md`, and `JitDiffRegressions.md`/`JitDiffImprovements.md` feed summaries; `Results.zip` is linked for full results. |
+| RegexDiff | `RegexSourceDiffExamples.json` and optional `JitDiffExamples.json` drive the hosted diff browser; `JitAnalyzeSummary.txt` contains the analyzer output and `Results.zip` contains full source results. |
 | FuzzLibraries | `-stack.txt`, `-inputs.zip`, and `-coverage.zip` suffixes identify crashes, persistent input corpora, and coverage. |
 | NuGetExtraAssemblies | `nuget-extra-assemblies.zip` and `nuget-extra-assemblies-subset.zip` update blobs subsequently supplied to JitDiff jobs. |
 | CoreRootGeneration | Server supplies `CoreRootSasUri`; save requests use Unix-second `commitTime` and require an existing standalone prefix entry, never a chain of deltas. |
 | Rebase / Backport | Server supplies `MihuBotPushToken`; backports additionally use the `BackportJob_*` metadata family. These jobs run through GitHub Actions. |
 
+The runner produces diff artifacts and MihuBot displays them in its web UI. Changes to diff reporting may require updating both repositories.
+
 ### Deployment coupling
 
-VM and Helix startup scripts clone the unpinned default branch of `MihaZupan/runtime-utils` and build/run it from a separate `runner-work` directory. Runner changes can reach new jobs independently of a MihuBot deployment. Keep metadata/API changes compatible across deployments and already-running prepared runners; deploy compatible server support before making runner changes that require it.
+VM and Helix startup scripts clone the unpinned default branch of `MihaZupan/runtime-utils` and build/run it from a separate `runner-work` directory. MihuBot and the runner, including prepared runners, are assumed to use matching, up-to-date versions.
 
 Linux Helix uses **Helix-specific prerequisite images**, selected by server `GetHelixDockerImage`, not necessarily this repository's prepared-runner Docker image. Defaults are Ubuntu 24.04 `dotnet-buildtools/prereqs` images with `-helix-amd64` / `-helix-arm64v8` tags; dynamic configuration and an admin-only `-docker <image>` override can change them. The `helixbot` user and Helix scripts are required. Consult the implementation if the companion instructions describe a different default.
 

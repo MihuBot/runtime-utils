@@ -534,64 +534,31 @@ internal sealed class RegexDiffJob : JobBase
         // MihuBot looks for this exact string in logs
         await LogAsync($"NOTE: {patternsWithDiffs} out of {entries.Length} patterns have generated source code changes.");
 
-        if (patternsWithDiffs > 0)
+        DiffExamples sourceExamples = new()
         {
-            string shortExample = GenerateExamplesMarkdown(entries, GitHubHelpers.CommentLengthLimit / 2, maxEntries: 10);
-            string longExample = GenerateExamplesMarkdown(entries, GitHubHelpers.GistLengthLimit, maxEntries: int.MaxValue);
-
-            await UploadTextArtifactAsync("ShortExampleDiffs.md", shortExample);
-
-            if (shortExample != longExample)
-            {
-                await UploadTextArtifactAsync("LongExampleDiffs.md", longExample);
-            }
-        }
-
-        static string GenerateExamplesMarkdown(RegexEntry[] entries, int maxMarkdownLength, int maxEntries)
+            Summary = $"{patternsWithDiffs:N0} out of {entries.Length:N0} patterns have generated source code changes."
+        };
+        RegexEntry[] changedEntries = entries.Where(e => e.FullDiff is not null).Take(DiffExamples.MaxEntries).ToArray();
+        int diffLimit = Math.Min(DiffExamples.MaxDiffLength, DiffExamples.TotalDiffLength / Math.Max(1, changedEntries.Length));
+        foreach (RegexEntry entry in changedEntries)
         {
-            StringBuilder sb = new();
-
-            int entriesIncluded = 0;
-
-            foreach (RegexEntry entry in entries)
-            {
-                if (entry.ShortDiff is not { } diff)
-                {
-                    continue;
-                }
-
-                if (sb.Length + diff.Length > maxMarkdownLength)
-                {
-                    continue;
-                }
-
-                int startLength = sb.Length;
-
-                sb.AppendLine("<details>");
-                sb.AppendLine($"<summary>{GetSummaryFriendlyName(entry.Regex)}</summary>");
-                sb.AppendLine();
-                sb.AppendLine(GetGeneratedRegexCodeBlock(entry.Regex));
-                sb.AppendLine();
-                sb.AppendLine("```diff");
-                sb.AppendLine(diff);
-                sb.AppendLine("```");
-                sb.AppendLine();
-                sb.AppendLine("</details>");
-
-                if (sb.Length > maxMarkdownLength && startLength != 0)
-                {
-                    sb.Length = startLength;
-                    break;
-                }
-
-                if (++entriesIncluded == maxEntries)
-                {
-                    break;
-                }
-            }
-
-            return sb.ToString();
+            string fullDiff = entry.FullDiff!;
+            bool compact = fullDiff.Length > diffLimit;
+            string text = DiffExamples.LimitDiff(compact ? entry.ShortDiff! : fullDiff, diffLimit, out bool truncated);
+            sourceExamples.Entries.Add(new(
+                "GeneratedRegex", SymbolDisplay.FormatLiteral(entry.Regex.Pattern, quote: true), "source",
+                $"{entry.Regex.Count:N0} uses; options: {entry.Regex.Options}", GetGeneratedRegexCodeBlock(entry.Regex),
+                text, compact || truncated));
         }
+        if (patternsWithDiffs > changedEntries.Length)
+        {
+            sourceExamples.Notes.Add($"Showing {changedEntries.Length:N0} source examples; all patterns and full diffs are available in Results.zip.");
+        }
+        if (sourceExamples.Entries.Any(e => e.Truncated))
+        {
+            sourceExamples.Notes.Add("Large examples use reduced context or omit their middle; untruncated source diffs are available in Results.zip.");
+        }
+        await UploadTextArtifactAsync("RegexSourceDiffExamples.json", JsonSerializer.Serialize(sourceExamples));
     }
 
     private async Task RunJitDiffAsync(KnownPattern[] knownPatterns, RegexEntry[] entries)
@@ -605,23 +572,21 @@ internal sealed class RegexDiffJob : JobBase
 
         PendingTasks.Enqueue(ZipAndUploadArtifactAsync("jit-diffs", JitDiffJob.DiffsDirectory));
 
-        PendingTasks.Enqueue(Task.Run(async () =>
-        {
-            string shortAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this,
-                $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
-                $"{JitDiffJob.DiffsPrDirectory}/{JitDiffJob.DasmSubdirectory}",
-                count: 100);
-
-            await UploadTextArtifactAsync("JitAnalyzeSummary.txt", shortAnalyzeSummary);
-        }));
-
-        string diffAnalyzeSummary = await JitDiffUtils.RunJitAnalyzeAsync(this,
+        Task<string> summaryTask = JitDiffUtils.RunJitAnalyzeAsync(this,
             $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
             $"{JitDiffJob.DiffsPrDirectory}/{JitDiffJob.DasmSubdirectory}",
-            count: 1_000);
+            count: 100);
+        Task<DiffExamples> examplesTask = DiffExamples.CreateJitAsync(this,
+            $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
+            $"{JitDiffJob.DiffsPrDirectory}/{JitDiffJob.DasmSubdirectory}",
+            TryGetExtraInfo, ReplaceDiffName);
 
-        await UploadJitDiffExamplesAsync(diffAnalyzeSummary, regressions: true, TryGetExtraInfo, ReplaceDiffName);
-        await UploadJitDiffExamplesAsync(diffAnalyzeSummary, regressions: false, TryGetExtraInfo, ReplaceDiffName);
+        await Task.WhenAll(summaryTask, examplesTask);
+        string shortAnalyzeSummary = await summaryTask;
+        await UploadTextArtifactAsync("JitAnalyzeSummary.txt", shortAnalyzeSummary);
+        DiffExamples examples = await examplesTask;
+        examples.Summary += $"\n\n{shortAnalyzeSummary}";
+        await UploadTextArtifactAsync("JitDiffExamples.json", JsonSerializer.Serialize(examples));
 
         async Task<string[]> GenerateRegexAssembliesAsync(bool baseline)
         {
@@ -754,50 +719,6 @@ internal sealed class RegexDiffJob : JobBase
             index = -1;
             return false;
         }
-    }
-
-    private async Task UploadJitDiffExamplesAsync(string diffAnalyzeSummary, bool regressions, Func<string, string?> tryGetExtraInfo, Func<string, string> replaceName)
-    {
-        var (diffs, noisyDiffsRemoved) = await JitDiffUtils.GetDiffMarkdownAsync(
-            this,
-            JitDiffUtils.ParseDiffAnalyzeEntries(diffAnalyzeSummary, regressions),
-            $"{JitDiffJob.DiffsMainDirectory}/{JitDiffJob.DasmSubdirectory}",
-            $"{JitDiffJob.DiffsPrDirectory}/{JitDiffJob.DasmSubdirectory}",
-            tryGetExtraInfo,
-            replaceName,
-            maxCount: 1_000);
-
-        string changes = JitDiffUtils.GetCommentMarkdown(diffs, GitHubHelpers.GistLengthLimit, regressions, out bool truncated);
-
-        await LogAsync($"Found {diffs.Length} changes, comment length={changes.Length} for {nameof(regressions)}={regressions}");
-
-        if (changes.Length != 0)
-        {
-            if (noisyDiffsRemoved)
-            {
-                changes = $"{changes}\n\nNote: some changes were skipped as they were likely noise.";
-            }
-
-            PendingTasks.Enqueue(UploadTextArtifactAsync($"JitDiff{(regressions ? "Regressions" : "Improvements")}.md", changes));
-
-            if (truncated)
-            {
-                changes = JitDiffUtils.GetCommentMarkdown(diffs, lengthLimit: 100 * 1024 * 1024, regressions, out _);
-                PendingTasks.Enqueue(UploadTextArtifactAsync($"LongJitDiff{(regressions ? "Regressions" : "Improvements")}.md", changes));
-            }
-        }
-    }
-
-    private static string GetSummaryFriendlyName(KnownPattern regex, int lengthLimit = 50)
-    {
-        string patternLiteral = SymbolDisplay.FormatLiteral(regex.Pattern, quote: true);
-
-        if (patternLiteral.Length > lengthLimit)
-        {
-            patternLiteral = $"{patternLiteral.AsSpan(0, lengthLimit - 5)} ...\"";
-        }
-
-        return $"{WebUtility.HtmlEncode(patternLiteral)} ({regex.Count} use{(regex.Count == 1 ? "" : "s")})";
     }
 
     private static string GetGeneratedRegexCodeBlock(KnownPattern regex)
