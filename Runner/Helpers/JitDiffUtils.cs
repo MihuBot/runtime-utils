@@ -109,7 +109,8 @@ internal static partial class JitDiffUtils
             envVars.Add(("DOTNET_JitDisasmWithGC", "1"));
         }
 
-        if (job.TryGetFlag("DisableOptimizedThreadStaticAccess"))
+        // Runtime-assigned thread-static offsets can otherwise introduce nondeterministic diffs.
+        if (!job.TryGetFlag("EnableOptimizedThreadStaticAccess"))
         {
             envVars.Add(("DOTNET_DisableOptimizedThreadStaticAccess", "1"));
         }
