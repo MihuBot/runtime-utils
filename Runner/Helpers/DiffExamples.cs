@@ -186,7 +186,7 @@ internal sealed class DiffExamples
         {
             report.Notes.Add($"{noisyCount:N0} selected examples were excluded as known noise. Use -includeKnownNoise to include them.");
         }
-        if (incompleteCount > 0)
+        if (incompleteCount > 2)
         {
             report.Notes.Add($"{incompleteCount:N0} incomplete method listings could not be compared.");
         }
