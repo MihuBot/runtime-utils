@@ -457,6 +457,10 @@ public abstract class JobBase
             WorkingDirectory = workDir ?? string.Empty,
         };
 
+        // dotnet run can leak its SDK paths; child builds must resolve their own SDK.
+        startInfo.Environment.Remove("MSBuildSDKsPath");
+        startInfo.Environment.Remove("MSBuildExtensionsPath");
+
         envVars = [.. _sharedEnvVars, .. envVars ?? []];
 
         foreach ((string key, string value) in envVars)
