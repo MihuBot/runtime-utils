@@ -62,11 +62,11 @@ internal sealed class DiffExamples
             .Order(StringComparer.Ordinal)
             .ToArray();
 
+        await job.LogAsync($"Indexing diff examples across {assemblies.Length:N0} assemblies");
         Candidate[][] candidatesByAssembly = new Candidate[assemblies.Length][];
         await Parallel.ForAsync(0, assemblies.Length, job.JobTimeout, async (index, cancellationToken) =>
         {
             string assembly = assemblies[index];
-            await job.LogAsync($"Indexing diff examples for {assembly}");
             var baseline = await IndexMethodsAsync(Path.Combine(mainDirectory, assembly), cancellationToken);
             var diff = await IndexMethodsAsync(Path.Combine(prDirectory, assembly), cancellationToken);
             Interlocked.Add(ref incompleteCount, baseline.Incomplete.Count + diff.Incomplete.Count);
@@ -109,6 +109,7 @@ internal sealed class DiffExamples
             .Select(item => item.Candidate)
             .ToArray();
 
+        await job.LogAsync($"Generating {selected.Length:N0} diff examples from {changedCount:N0} changed method listings");
         int limit = Math.Min(MaxDiffLength, TotalDiffLength / Math.Max(1, selected.Length));
         Entry?[] entries = new Entry?[selected.Length];
         int noisyCount = 0;
