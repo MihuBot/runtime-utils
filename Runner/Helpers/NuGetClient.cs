@@ -163,7 +163,8 @@ internal sealed class NuGetClient
             string? licenseUrl;
             try
             {
-                var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct);
+                var metadataResource = await _repository.GetResourceAsync<PackageMetadataResource>(ct)
+                    ?? throw new InvalidOperationException("The NuGet feed does not provide a package metadata resource.");
                 var metadata = await metadataResource.GetMetadataAsync(
                     new PackageIdentity(id, NuGetVersion.Parse(version)), _sourceCache, _nugetLogger, ct);
                 license = metadata?.LicenseMetadata;
@@ -407,7 +408,8 @@ internal sealed class NuGetClient
         {
             try
             {
-                var byIdResource = await _repository.GetResourceAsync<FindPackageByIdResource>(ct);
+                var byIdResource = await _repository.GetResourceAsync<FindPackageByIdResource>(ct)
+                    ?? throw new InvalidOperationException("The NuGet feed does not provide a find-package-by-ID resource.");
                 var versions = await byIdResource.GetAllVersionsAsync(id, _sourceCache, _nugetLogger, ct);
                 NuGetVersion? latest = versions.Where(v => v is not null).Max();
                 return latest?.ToNormalizedString();
@@ -434,7 +436,8 @@ internal sealed class NuGetClient
 
         try
         {
-            var depInfoResource = await _repository.GetResourceAsync<DependencyInfoResource>();
+            var depInfoResource = await _repository.GetResourceAsync<DependencyInfoResource>()
+                ?? throw new InvalidOperationException("The NuGet feed does not provide a dependency info resource.");
             var rootIdentity = new PackageIdentity(rootId, NuGetVersion.Parse(rootVersion));
 
             var availablePackages = new HashSet<SourcePackageDependencyInfo>(PackageIdentityComparer.Default);
