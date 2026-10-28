@@ -1,4 +1,5 @@
 ﻿using System.IO.Compression;
+using System.Xml.Linq;
 
 namespace Runner.Jobs;
 
@@ -161,6 +162,14 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                     "<NoWarn>$(NoWarn);NU1605</NoWarn>\r\n    <OutputType>Exe</OutputType>",
                     StringComparison.OrdinalIgnoreCase);
                 File.WriteAllText(Path, source);
+            }
+
+            {
+                // The harness otherwise requests older targeting packs that a daily SDK may not have published yet.
+                const string Path = "performance/src/harness/BenchmarkDotNet.Extensions/BenchmarkDotNet.Extensions.csproj";
+                XDocument project = XDocument.Load(Path);
+                project.Descendants("TargetFramework").Single().Value = $"net{GetPerformanceDotnetVersion()}.0";
+                project.Save(Path);
             }
 
             if (TryGetFlag("parallel"))
@@ -350,7 +359,7 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
             $"run -c Release --framework net{dotnetVersion}.0 -- --filter {filter} -h {HiddenColumns} --corerun {coreRuns} {parallelSuffix}",
             workDir: "performance/src/benchmarks/micro",
             checkExitCode: false,
-            envVars: DotnetHelpers.GetSdkEnvVars(),
+            envVars: [.. DotnetHelpers.GetSdkEnvVars(), ("PERFLAB_TARGET_FRAMEWORKS", $"net{dotnetVersion}.0")],
             processLogs: line =>
             {
                 // Example:

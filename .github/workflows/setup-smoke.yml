@@ -173,6 +173,7 @@ jobs:
           import os
           from pathlib import Path
           import re
+          import xml.etree.ElementTree as ET
 
           version = os.environ["SDK_VERSION"]
           global_json = Path("global.json")
@@ -197,6 +198,12 @@ jobs:
           project.write_text(re.sub("<OutputType>Exe</OutputType>",
               "<NoWarn>$(NoWarn);NU1605</NoWarn><OutputType>Exe</OutputType>", project.read_text(), flags=re.IGNORECASE))
 
+          harness = Path("src/harness/BenchmarkDotNet.Extensions/BenchmarkDotNet.Extensions.csproj")
+          project = ET.parse(harness)
+          framework, = project.findall(".//TargetFramework")
+          framework.text = f"net{version.split('.')[0]}.0"
+          project.write(harness, encoding="utf-8")
+
           with open(os.environ["GITHUB_ENV"], "a") as output:
               output.write(f"BENCHMARK_FRAMEWORK=net{version.split('.')[0]}.0\n")
 
@@ -205,6 +212,7 @@ jobs:
         working-directory: ${{ env.PERFORMANCE_DIR }}/src/benchmarks/micro
         run: |
           dotnet --info
+          export PERFLAB_TARGET_FRAMEWORKS="$BENCHMARK_FRAMEWORK"
           dotnet run -c Release --framework "$BENCHMARK_FRAMEWORK" -- \
             --filter 'System.Tests.Perf_Int32.CopySign*' \
             --artifacts "$RUNNER_TEMP/benchmark-smoke-results"
