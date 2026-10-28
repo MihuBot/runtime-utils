@@ -1,4 +1,5 @@
 ﻿using System.IO.Compression;
+using System.Xml.Linq;
 
 namespace Runner.Jobs;
 
@@ -163,7 +164,25 @@ internal sealed class JitDiffJob : JobBase
                 await job.RunProcessAsync("chmod", "751 jitutils/bin/clang-tidy", logPrefix: LogPrefix);
             }
 
-            await job.RunProcessAsync("bash", "bootstrap.sh", logPrefix: LogPrefix, workDir: "jitutils");
+            // Keep the tooling SDK separate: newer SDKs can request unpublished servicing packs for older targets.
+            string sdkDirectory = Path.GetFullPath("jitutils-sdk");
+            const string GlobalJsonPath = "jitutils/global.json";
+
+            if (File.Exists(GlobalJsonPath))
+            {
+                await DotnetHelpers.InstallDotnetSdkAsync(job, GlobalJsonPath, sdkDirectory);
+            }
+            else
+            {
+                string targetFramework = XDocument.Load("jitutils/src/Directory.Build.props")
+                    .Descendants("TargetFramework").Single().Value;
+                int sdkVersion = Version.Parse(targetFramework.AsSpan("net".Length)).Major;
+                await DotnetHelpers.InstallDotnetReleaseSdkAsync(job, sdkVersion, sdkDirectory);
+            }
+
+            await DotnetHelpers.GetInstalledDotnetSdkVersionAsync(job, sdkDirectory);
+            await job.RunProcessAsync("bash", "bootstrap.sh", logPrefix: LogPrefix, workDir: "jitutils",
+                envVars: DotnetHelpers.GetSdkEnvVars(sdkDirectory));
         });
 
         Task createDirectoriesTask = Task.Run(() =>

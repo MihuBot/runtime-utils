@@ -1,0 +1,239 @@
+name: Setup smoke tests
+
+on:
+  push:
+    branches:
+      - main
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    if: github.repository == 'MihaZupan/runtime-utils' || github.event_name == 'workflow_dispatch'
+    name: ${{ matrix.suite }} / Linux ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    container: ubuntu:24.04
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      HOME: /root
+      DEBIAN_FRONTEND: noninteractive
+      APT_OPTS: -o DPkg::Lock::Timeout=600 -o Acquire::Retries=3
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [jitutils, benchmarks]
+        arch: [x64, arm64]
+        include:
+          - arch: x64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - name: Install VM prerequisites and bootstrap .NET 11
+        run: |
+          export PATH=/usr/local/dotnet:$PATH
+          apt-get $APT_OPTS update || apt-get $APT_OPTS update
+          apt-get $APT_OPTS install -y --no-install-recommends \
+            ca-certificates curl git wget python3 zip p7zip-full ninja-build \
+            libgssapi-krb5-2 libicu74 libssl3t64 libstdc++6 zlib1g
+
+          if ! (apt-get $APT_OPTS install -y dotnet-sdk-11.0 || apt-get $APT_OPTS install -y dotnet-sdk-11.0); then
+            echo "::notice::The distro .NET 11 SDK is unavailable; checking the VM daily-SDK fallback."
+          fi
+          if ! dotnet --list-sdks 2>/dev/null | grep -q "^11\."; then
+            curl --fail --silent --show-error --location https://dot.net/v1/dotnet-install.sh \
+              -o "$RUNNER_TEMP/dotnet-install.sh"
+            bash "$RUNNER_TEMP/dotnet-install.sh" --channel 11.0 --quality daily --install-dir /usr/local/dotnet
+          fi
+          dotnet --info
+          echo "/usr/local/dotnet" >> "$GITHUB_PATH"
+
+      - name: Check out Runner
+        uses: actions/checkout@v5
+
+      - name: Build Runner with the VM SDK
+        run: dotnet build Runner/Runner.csproj -c Release --nologo
+
+      - name: Set scratch paths
+        run: |
+          echo "JITUTILS_DIR=$RUNNER_TEMP/jitutils" >> "$GITHUB_ENV"
+          echo "PERFORMANCE_DIR=$RUNNER_TEMP/performance" >> "$GITHUB_ENV"
+          echo "SDK_DIR=$RUNNER_TEMP/${{ matrix.suite }}-sdk" >> "$GITHUB_ENV"
+
+      - name: Clone current jitutils
+        if: matrix.suite == 'jitutils'
+        run: |
+          git clone --depth 1 --branch main https://github.com/dotnet/jitutils.git "$JITUTILS_DIR"
+          git -C "$JITUTILS_DIR" log -1
+
+      - name: Determine jitutils SDK channel
+        if: matrix.suite == 'jitutils'
+        id: jitutils-sdk
+        shell: python3 {0}
+        run: |
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          repository = Path(os.environ["JITUTILS_DIR"])
+          if not (repository / "global.json").exists():
+              framework, = ET.parse(repository / "src/Directory.Build.props").findall(".//TargetFramework")
+              major = int(framework.text[3:].split(".")[0])
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"channel={major}.0\n")
+
+      - name: Install isolated SDK
+        if: matrix.suite == 'jitutils'
+        env:
+          SDK_CHANNEL: ${{ steps.jitutils-sdk.outputs.channel }}
+        run: |
+          curl --fail --silent --show-error --location https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
+          if [ -f "$JITUTILS_DIR/global.json" ]; then
+            bash "$RUNNER_TEMP/dotnet-install.sh" --jsonfile "$JITUTILS_DIR/global.json" --install-dir "$SDK_DIR"
+          else
+            bash "$RUNNER_TEMP/dotnet-install.sh" --channel "$SDK_CHANNEL" --quality GA --install-dir "$SDK_DIR"
+          fi
+          echo "$SDK_DIR" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "DOTNET_ROOT_${{ matrix.arch == 'arm64' && 'ARM64' || 'X64' }}=$SDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Download ARM64 clang tools
+        if: matrix.suite == 'jitutils' && matrix.arch == 'arm64'
+        run: |
+          mkdir -p "$JITUTILS_DIR/bin"
+          for tool in clang-format clang-tidy; do
+            curl --fail --silent --show-error --location \
+              "https://raw.githubusercontent.com/MihaZupan/runtime-utils/clang-tools/$tool" \
+              -o "$JITUTILS_DIR/bin/$tool"
+            chmod 751 "$JITUTILS_DIR/bin/$tool"
+          done
+
+      - name: Bootstrap jitutils
+        if: matrix.suite == 'jitutils'
+        working-directory: ${{ env.JITUTILS_DIR }}
+        run: |
+          dotnet --info
+          bash bootstrap.sh
+
+      - name: Launch diff tools
+        if: matrix.suite == 'jitutils'
+        working-directory: ${{ env.JITUTILS_DIR }}
+        run: |
+          bin/jit-diff --help
+          bin/jit-analyze --help
+
+      - name: Clone current benchmarks
+        if: matrix.suite == 'benchmarks'
+        run: |
+          git clone --depth 1 --branch main https://github.com/dotnet/performance.git "$PERFORMANCE_DIR"
+          git -C "$PERFORMANCE_DIR" log -1
+
+      - name: Determine benchmark SDK channel
+        if: matrix.suite == 'benchmarks'
+        id: benchmarks-sdk
+        shell: python3 {0}
+        run: |
+          import os
+          from pathlib import Path
+          import re
+
+          project = Path(os.environ["PERFORMANCE_DIR"]) / "src/benchmarks/micro/MicroBenchmarks.csproj"
+          matches = re.findall(r"((?:net\d+\.\d+);?)+</", project.read_text())
+          if not matches:
+              raise RuntimeError("Failed to determine the benchmark SDK version")
+          major = max(int(framework[3:].split(".")[0]) for framework in matches)
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"channel={major}.0\n")
+
+      - name: Install isolated daily SDK
+        if: matrix.suite == 'benchmarks'
+        env:
+          SDK_CHANNEL: ${{ steps.benchmarks-sdk.outputs.channel }}
+        run: |
+          curl --fail --silent --show-error --location https://dot.net/v1/dotnet-install.sh -o "$RUNNER_TEMP/dotnet-install.sh"
+          bash "$RUNNER_TEMP/dotnet-install.sh" --channel "$SDK_CHANNEL" --quality daily --install-dir "$SDK_DIR"
+          echo "SDK_VERSION=$("$SDK_DIR/dotnet" --version)" >> "$GITHUB_ENV"
+          echo "$SDK_DIR" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$SDK_DIR" >> "$GITHUB_ENV"
+          echo "DOTNET_ROOT_${{ matrix.arch == 'arm64' && 'ARM64' || 'X64' }}=$SDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Apply runner benchmark setup
+        if: matrix.suite == 'benchmarks'
+        working-directory: ${{ env.PERFORMANCE_DIR }}
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+          import re
+
+          version = os.environ["SDK_VERSION"]
+          global_json = Path("global.json")
+          settings = json.loads(global_json.read_text())
+          for section in ("sdk", "tools"):
+              if section in settings:
+                  settings[section]["version" if section == "sdk" else "dotnet"] = version
+          global_json.write_text(json.dumps(settings, indent=2))
+
+          config = next(Path("src").rglob("RecommendedConfig.cs"))
+          source = config.read_text()
+          marker = "ManualConfig.CreateEmpty()"
+          if marker not in source:
+              raise RuntimeError("BenchmarkDotNet configuration changed")
+          config.write_text(source.replace(marker,
+              marker + ".WithOption(BenchmarkDotNet.Configs.ConfigOptions.DisableParallelBuild, true)"))
+
+          props = Path("src/Directory.Build.props")
+          props.write_text(re.sub("<TreatWarningsAsErrors>True</TreatWarningsAsErrors>",
+              "<TreatWarningsAsErrors>false</TreatWarningsAsErrors>", props.read_text(), flags=re.IGNORECASE))
+          project = Path("src/benchmarks/micro/MicroBenchmarks.csproj")
+          project.write_text(re.sub("<OutputType>Exe</OutputType>",
+              "<NoWarn>$(NoWarn);NU1605</NoWarn><OutputType>Exe</OutputType>", project.read_text(), flags=re.IGNORECASE))
+
+          with open(os.environ["GITHUB_ENV"], "a") as output:
+              output.write(f"BENCHMARK_FRAMEWORK=net{version.split('.')[0]}.0\n")
+
+      - name: Build and execute one benchmark
+        if: matrix.suite == 'benchmarks'
+        working-directory: ${{ env.PERFORMANCE_DIR }}/src/benchmarks/micro
+        run: |
+          dotnet --info
+          dotnet run -c Release --framework "$BENCHMARK_FRAMEWORK" -- \
+            --filter 'System.Tests.Perf_Int32.CopySign*' \
+            --artifacts "$RUNNER_TEMP/benchmark-smoke-results"
+
+      - name: Verify benchmark executed
+        if: matrix.suite == 'benchmarks'
+        shell: python3 {0}
+        run: |
+          import json
+          import os
+          from pathlib import Path
+
+          reports = list((Path(os.environ["RUNNER_TEMP"]) / "benchmark-smoke-results").rglob("*-full.json"))
+          if not reports:
+              raise RuntimeError("No benchmark results were produced")
+          for report in reports:
+              benchmarks = json.loads(report.read_text())["Benchmarks"]
+              if not benchmarks:
+                  raise RuntimeError(f"No benchmarks in {report.name}")
+              for benchmark in benchmarks:
+                  statistics = benchmark.get("Statistics")
+                  if not statistics or statistics["N"] < 1:
+                      raise RuntimeError(f"Benchmark did not execute: {benchmark['FullName']}")
+
+      - name: Upload benchmark diagnostics
+        if: always() && matrix.suite == 'benchmarks'
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-smoke-${{ matrix.arch }}
+          path: ${{ runner.temp }}/benchmark-smoke-results
+          if-no-files-found: ignore
+          retention-days: 7

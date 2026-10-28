@@ -58,6 +58,9 @@ internal static class DotnetHelpers
     public static async Task InstallDotnetDailySdkAsync(JobBase job, int version, string? installDir = null) =>
         await InstallDotnetSdkAsyncCore(job, $"--channel {version}.0 --quality daily", installDir);
 
+    public static async Task InstallDotnetReleaseSdkAsync(JobBase job, int version, string? installDir = null) =>
+        await InstallDotnetSdkAsyncCore(job, $"--channel {version}.0 --quality GA", installDir);
+
     /// <summary>
     /// Environment variables that point child processes at the SDK we installed into <paramref name="installDir"/>.
     /// </summary>
