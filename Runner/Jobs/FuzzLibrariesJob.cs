@@ -61,6 +61,10 @@ internal sealed partial class FuzzLibrariesJob : JobBase
             call run.bat
             """);
 
+        // Local merge/patch commits are not on GitHub; generate coverage from the sources we built.
+        Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/collect-coverage.ps1",
+            content => content.Replace("\"--use-source-link\",", string.Empty, StringComparison.Ordinal));
+
         if (IsArm)
         {
             Patch("runtime/src/libraries/Fuzzing/DotnetFuzzing/run.bat",
