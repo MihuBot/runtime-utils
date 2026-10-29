@@ -156,13 +156,18 @@ internal sealed partial class FuzzLibrariesJob : JobBase
 
         try
         {
-            var remoteInputsZipBlob = PersistentStateClient.GetBlobClient($"{inputsDirectory}.zip");
-            if (!TryGetFlag("skipExistingInputs") && await remoteInputsZipBlob.ExistsAsync(JobTimeout))
+            if (!TryGetFlag("skipExistingInputs"))
             {
-                var content = (await remoteInputsZipBlob.DownloadContentAsync(JobTimeout)).Value;
-                ZipFile.ExtractToDirectory(content.Content.ToStream(), inputsDirectory);
+                using var response = await GetPersistentStateAsync($"{inputsDirectory}.zip");
+                if (response.StatusCode != HttpStatusCode.NotFound)
+                {
+                    response.EnsureSuccessStatusCode();
 
-                await LogAsync($"Downloaded {Directory.EnumerateFiles(inputsDirectory).Count()} inputs from previous fuzzing runs");
+                    using var content = new MemoryStream(await response.Content.ReadAsByteArrayAsync(JobTimeout));
+                    ZipFile.ExtractToDirectory(content, inputsDirectory);
+
+                    await LogAsync($"Downloaded {Directory.EnumerateFiles(inputsDirectory).Count()} inputs from previous fuzzing runs");
+                }
             }
         }
         catch (Exception ex)

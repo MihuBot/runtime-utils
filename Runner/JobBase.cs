@@ -1,5 +1,4 @@
-﻿using Azure.Storage.Blobs;
-using Hardware.Info;
+﻿using Hardware.Info;
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.IO.Compression;
@@ -96,7 +95,12 @@ public abstract class JobBase
         return value.Length > 0;
     }
 
-    protected BlobContainerClient PersistentStateClient => new(new Uri(Metadata["PersistentStateSasUri"]));
+    protected Task<HttpResponseMessage> GetPersistentStateAsync(string fileName)
+    {
+        var uri = new UriBuilder(Metadata["PersistentStateSasUri"]);
+        uri.Path = $"{uri.Path.TrimEnd('/')}/{Uri.EscapeDataString(fileName)}";
+        return HttpClient.GetAsync(uri.Uri, HttpCompletionOption.ResponseHeadersRead, JobTimeout);
+    }
 
     public JobBase(HttpClient client)
     {

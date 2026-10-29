@@ -179,7 +179,14 @@ internal sealed partial class BenchmarkLibrariesJob : JobBase
                     customNugetFeedDirectory.Create();
 
                     const string ZipPath = "BenchmarkDotNet-custom.zip";
-                    await PersistentStateClient.GetBlobClient(ZipPath).DownloadToAsync(ZipPath, JobTimeout);
+                    using (var response = await GetPersistentStateAsync(ZipPath))
+                    {
+                        response.EnsureSuccessStatusCode();
+
+                        await using var destination = File.Create(ZipPath);
+                        await response.Content.CopyToAsync(destination, JobTimeout);
+                    }
+
                     ZipFile.ExtractToDirectory(ZipPath, customNugetFeedDirectory.FullName);
 
                     string version = customNugetFeedDirectory.GetFiles()
