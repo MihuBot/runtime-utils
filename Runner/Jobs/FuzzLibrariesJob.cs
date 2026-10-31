@@ -41,10 +41,11 @@ internal sealed partial class FuzzLibrariesJob : JobBase
         const string BuildRuntimeBat = "build-runtime.bat";
         const string PrepareFuzzerBat = "prepare-fuzzer.bat";
 
+        await RunProcessAsync("git", "switch pr", workDir: "runtime");
+
         File.WriteAllText(BuildRuntimeBat,
             $$"""
             cd runtime
-            git switch pr
 
             call .\build.cmd clr+libs -rc Checked -c Debug {{RuntimeHelpers.LibrariesExtraBuildArgs}}
 
